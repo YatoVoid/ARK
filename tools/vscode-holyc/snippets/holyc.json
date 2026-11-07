@@ -1,0 +1,27 @@
+{
+  "Main": {
+    "prefix": "main",
+    "body": ["I32 Main(I32 argc, U8 **argv)", "{", "\t$0", "\treturn 0;", "}"],
+    "description": "Program entry point for hcc"
+  },
+  "class": {
+    "prefix": "class",
+    "body": ["class ${1:Name}", "{", "\t${2:I64 field};", "};"],
+    "description": "HolyC class (a C struct)"
+  },
+  "extern c": {
+    "prefix": "extern",
+    "body": ["extern \"c\" ${1:I32} ${2:name}(${3});"],
+    "description": "Declare a C library function"
+  },
+  "print": {
+    "prefix": "print",
+    "body": ["\"${1:%d}\\n\", ${2:value};"],
+    "description": "A bare string statement prints, like printf"
+  },
+  "for": {
+    "prefix": "for",
+    "body": ["for (I64 ${1:i} = 0; $1 < ${2:n}; $1++) {", "\t$0", "}"],
+    "description": "Counting loop"
+  }
+}

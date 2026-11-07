@@ -1,0 +1,4 @@
+build/
+*.ppm
+station-*/
+tools/vscode-holyc/*.vsix

@@ -1,0 +1,25 @@
+{
+  "name": "holyc",
+  "displayName": "HolyC",
+  "description": "Syntax highlighting and snippets for HolyC (.HC, .HH), as compiled by hcc.",
+  "version": "0.1.0",
+  "publisher": "yatovoid",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "https://github.com/YatoVoid/ARK" },
+  "engines": { "vscode": "^1.80.0" },
+  "categories": ["Programming Languages", "Snippets"],
+  "contributes": {
+    "languages": [{
+      "id": "holyc",
+      "aliases": ["HolyC", "holyc"],
+      "extensions": [".HC", ".HH", ".hc", ".hh"],
+      "configuration": "./language-configuration.json"
+    }],
+    "grammars": [{
+      "language": "holyc",
+      "scopeName": "source.holyc",
+      "path": "./syntaxes/holyc.tmLanguage.json"
+    }],
+    "snippets": [{ "language": "holyc", "path": "./snippets/holyc.json" }]
+  }
+}
