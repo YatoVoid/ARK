@@ -5,4 +5,5 @@ dir="$1"
 grep -q '^ark-export	1$' "$dir/report/export.tsv" || { echo "error no export" > "$dir/report/status"; exit 1; }
 printf '# Incident report: test\n\n## Key figures\n\n- %s server events\n' \
   "$(grep -c '^event	' "$dir/report/export.tsv")" > "$dir/report/report.md"
-echo "done 0.1 figures No local model summary: test." > "$dir/report/status"
+printf "%%PDF-1.4\n" > "$dir/report/report.pdf"
+echo "done 0.1 figures pdf No local model summary: test." > "$dir/report/status"

@@ -341,9 +341,10 @@ I32 Main(I32 argc, U8 **argv)
         "export holds systems, notes and the cut");
   Free(exp);
   setenv("ARK_REPORT_CMD", "tests/fake-report.sh", 1);
+  setenv("ARK_OPEN_CMD", "touch build/tmp-ui-test/opened; true", 1);
   a->view = V_REPORT;
   Draw(a);
-  Check(Click(a, H_WRITE), "Write report is clickable");
+  Check(Click(a, H_WRITE), "Request report is clickable");
   Check(a->report_state == RS_RUNNING, "the report runs in the background");
   for (I64 i = 0; i < 50 && a->report_state == RS_RUNNING; i++) {
     system("sleep 0.1");
@@ -352,8 +353,10 @@ I32 Main(I32 argc, U8 **argv)
   Check(a->report_state == RS_DONE && strstr(a->report_text, "# Incident report: test") != NULL,
         "the station shows the report when the tool is done");
   Check(strstr(a->report_msg, "figures only") != NULL, "it says when there was no model summary");
+  system("sleep 0.2");
+  Check(access("build/tmp-ui-test/opened", 0) == 0, "the PDF is opened on screen when it's ready");
   Draw(a);
-  Check(Click(a, H_WRITE) && a->report_state == RS_RUNNING, "Write again runs it again");
+  Check(Click(a, H_WRITE) && a->report_state == RS_RUNNING, "Request again runs it again");
   for (I64 i = 0; i < 50 && a->report_state == RS_RUNNING; i++) {
     system("sleep 0.1");
     PollReport(a);
@@ -372,6 +375,45 @@ I32 Main(I32 argc, U8 **argv)
   U8 zero[SK_BYTES];
   MemSet(zero, 0, SK_BYTES);
   Check(Same(a->st->sk, zero, SK_BYTES), "locking zeroes the secret key");
+
+  // Starting over: someone picked Start by mistake and wants out.
+  system("rm -rf build/tmp-ui-clear");
+  App *x = AppNew("build/tmp-ui-clear", "/nonexistent", NULL);
+  x->cv = a->cv;
+  Type(x, "Oops");
+  Key(x, KEY_RETURN);
+  Draw(x);
+  Check(Click(x, H_BACK) && x->mode == MODE_NEW_NAME, "Start over before the passphrase goes back to the name");
+  Type(x, "Riley");
+  Key(x, KEY_RETURN);
+  Type(x, "a long passphrase");
+  Key(x, KEY_RETURN);
+  Type(x, "a long passphrase");
+  Key(x, KEY_RETURN);
+  Click(x, H_START);
+  Type(x, "Wrong incident");
+  Key(x, KEY_RETURN);
+  Check(Ready(x) && IsAdmin(x->st), "an incident opened by mistake makes this station admin");
+  x->view = V_TEAM;
+  Draw(x);
+  Check(Click(x, H_CLEAR) && x->mode == MODE_READY, "one Clear press only arms it");
+  Draw(x);
+  Check(Click(x, H_CLEAR) && x->mode == MODE_NEW_NAME, "a second press goes back to the first setup step");
+  Check(access("build/tmp-ui-clear/secrets", 0) != 0 && access("build/tmp-ui-clear", 0) != 0,
+        "the station directory is deleted");
+  Check(x->st->log->count == 0 && x->st->epoch == -1, "no log or team key left in memory");
+  Type(x, "Riley");
+  Key(x, KEY_RETURN);
+  Type(x, "a long passphrase");
+  Key(x, KEY_RETURN);
+  Type(x, "a long passphrase");
+  Key(x, KEY_RETURN);
+  Check(x->mode == MODE_NEW_CHOICE, "setup works again after clearing");
+  Draw(x);
+  Click(x, H_CLEAR);
+  Draw(x);
+  Click(x, H_CLEAR);
+  Check(x->mode == MODE_NEW_NAME, "Start over on the setup screens clears it too");
 
   CanvasClose(a->cv);
   if (g_failed > 0)

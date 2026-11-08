@@ -13,7 +13,7 @@ The GIF is drawn from the real code: `tests/render_demo.HC` runs both stations t
 | Arduino UNO Q | relay | `relay/hub.py` (forwards sealed messages), the ARK animation on its LED matrix |
 | Arduino UNO | panel, plugged into laptop A | `firmware/panel`: red CUT, green RESTORE, two LEDs, buzzer |
 | FS-01 | the watched server | in the demo, laptop A plays it: the shell hook and `tools/ark-watch` |
-| Local model | writes the report's summary | Ollama with gemma3:4b on laptop A, offline |
+| Local model | writes the report's summary and next steps | Ollama with gemma3:4b on laptop A, offline |
 
 Laptop A reaches the relay over USB. Laptop B reaches it over a Wi-Fi network the team controls (the UNO Q joins it), never the company network. For a one-laptop rehearsal both stations run on laptop A and both use USB.
 
@@ -146,7 +146,7 @@ sudo commands, SSH and su logins and failed passwords are picked up from the jou
 3. **On B,** press **Report to manager**. A's panel beeps three times and the alert sits at the top of A's control panel. B shows the row as REPORTED.
 4. **On A,** press **Acknowledge**, then the red button. The red LED lights, the top bar reads **Internet: CUT**, and a signed entry tells everyone. Chat between A and B keeps working.
 5. **On A,** press green once "backups are done". The green LED lights and the internet comes back. Only the manager's station can do this.
-6. **On A,** open **Report** (F7) and press **Write report**. In about 7 seconds it shows what happened, records lost and protected, the money estimate, deadlines and next steps. Paragraphs marked LOCAL MODEL were written by gemma3:4b on the laptop; every figure comes from the log. Saved as `station-a/report/report.md`.
+6. **On A (or B),** open **Report** (F7) and press **Request report**. In about 8 seconds the PDF opens: summary, timeline, records lost and protected, the money estimate, deadlines and next steps. The summary and next steps were written by gemma3:4b on the laptop, and each sentence shows the figures (F) and timeline rows (T) it cites; everything else comes straight from the log. Saved as `station-a/report/report.pdf`.
 
 Before the steps, record what was hit on the Scope page (F4), for example `FS-01`, PII, TX, 4120, ENCRYPTED and `NAS-02`, OTHER, 18000, CLEAN. The report's lost and protected figures come from there.
 
@@ -167,9 +167,11 @@ Everything looks and logs the same, but the network stays up. Drop the two varia
 | `stty: /dev/ttyUSB0: Device or resource busy` | The Arduino IDE (its serial monitor) has the port. Quit the IDE fully, then start station A again. |
 | `could not reach the relay at TCP:127.0.0.1:4210` | UNO Q not on USB, or the hub isn't running. Check `adb devices`, then start the relay. |
 | Top bar says **Relay: alone** | The other station isn't connected yet, or the hub restarted. Restart that station. |
-| A station shows the unlock screen and the passphrase is lost | There's no recovery. Close it, `rm -rf station-a` (or `-b`), start over. |
+| A station shows the unlock screen and the passphrase is lost | There's no recovery. Press **Clear station** twice on the unlock screen and set it up again. |
+| Someone pressed Start instead of Join (or the other way round) | **Start over** on the setup screen, or **Clear this station** on the Team page, twice. It deletes that station's data on this laptop only. |
+| The PDF doesn't open | It's saved in `station-a/report/report.pdf`. ARK opens it with `xdg-open`; set `ARK_OPEN_CMD=okular` (or another viewer) if that does nothing. |
 | Server log stays empty | `ark-watch` must point at the station directory of a running, unlocked station (`station-a`). Commands typed in a shell show only with the hook sourced in that shell. |
-| Report says "No local model summary: Ollama isn't running" | `ollama serve`, then Write again. |
+| Report says "No local model summary: Ollama isn't running" | `ollama serve`, then Request again. |
 | Report says "the model isn't installed" | `ollama pull gemma3:4b` (needs the internet). |
 | Report takes 20 s or more | The model wasn't loaded. Run `tools/ark-report --warm` before the demo. |
 | Panel doesn't beep or light | Reflash `firmware/panel`. Station A must be started with `PANEL=/dev/ttyUSB0`. |
@@ -193,4 +195,4 @@ adb shell 'pkill -f "^python3 hub.py"'
 curl -s 127.0.0.1:11434/api/generate -d '{"model":"gemma3:4b","keep_alive":0}' >/dev/null   # frees the GPU
 ```
 
-`station-a/report/` keeps every report written, in plain text. Delete it with the station directory when the incident is closed.
+`station-a/report/` keeps every report written, as PDF and markdown. Delete it with the station directory when the incident is closed.

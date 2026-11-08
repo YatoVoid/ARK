@@ -12,6 +12,7 @@ Tested on Arch Linux (kernel 7.2, KDE Wayland), November 2026.
 | libsodium | `libsodium` | 1.0.22 |
 | socat (tests only) | `socat` | |
 | arduino-cli (firmware) | `arduino-cli` | 1.5.1 |
+| reportlab (report PDF) | `python-reportlab` | 5.1.0 |
 | Ollama (report summary, optional) | [ollama.com/download](https://ollama.com/download) | 0.40.10 |
 | gemma3:4b model (3.4 GB) | `ollama pull gemma3:4b` | |
 
@@ -36,7 +37,7 @@ SDL_VIDEODRIVER=offscreen ./build/render_views     # writes build/ui-*.ppm
 
 ## Report model
 
-The Report page works without a model; it then writes the figures only. For the summary paragraphs:
+The Report page works without a model; it then writes the figures and timeline only. Without reportlab it writes report.md but no PDF. For the summary and next steps:
 
 ```sh
 ollama pull gemma3:4b        # once, needs the internet

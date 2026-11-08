@@ -111,3 +111,11 @@ A Report page (F7) writes an after-incident report for the company: what happene
 - The first number guard allowed any number found anywhere in the prompt. Writing the injection test showed the hole: a command the attacker types can carry a number. Only numbers in the computed figures, and log time stamps, are allowed now.
 - A cold first request was about 5 s slower than the next one even with the model loaded, so `--warm` runs one token instead of only loading.
 - The render runs in a second, so every demo entry had the same time and the report said "under a minute" for everything. `render_demo` gives entries the times the story would take before exporting; the GIF says so on that frame.
+
+## 2026-11-08, citations, PDF and starting over
+
+- The report's timeline is now written by code, and the model writes only the summary and next steps. Each of its sentences cites the figures (F) and timeline rows (T) it rests on and is dropped if it names anything not in them. In live runs that removed an invented year and a sentence citing the wrong row. The report is a PDF that the station opens by itself; the button is Request report.
+- gemma3:4b with a JSON schema of objects (text plus a list of citations) looped until Ollama aborted with "token repeat limit reached". A flat list of strings, each ending in `[F4, T12]`, works.
+- The citation check first rejected "December 7th" and the "01" in "FS-01". Ordinals are read as numbers now, and digits inside a name are checked as part of the name.
+- Setup had no way back: someone who pressed Start instead of Join had to delete the station directory by hand. Start over (setup), Clear station (unlock screen) and Clear this station (Team page) delete this station's data after two presses.
+

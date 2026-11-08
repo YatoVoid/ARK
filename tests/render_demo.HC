@@ -181,6 +181,7 @@ I32 Main(I32 argc, U8 **argv)
   // 6. The manager writes the report for the company.
   SpreadTimes(a->st->log);
   setenv("ARK_COST_PER_RECORD", "160", 1);
+  setenv("ARK_OPEN_CMD", "true", 1);
   ExportReport(a);
   system("tools/ark-report build/tmp-demo-a >/dev/null");
   a->view = V_REPORT;

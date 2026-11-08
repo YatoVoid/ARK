@@ -28,7 +28,8 @@ Built for HackUTD (Winstead PC track: Cyber Incident Response Dashboard), Novemb
 | Server log: shell commands, sudo, logins, failed logins and web requests from `tools/ark-watch`, flagged by attack-step rules, reported to the manager in one click | done, tested (`test_ui`, `test_watch`); watcher tested live on Arch |
 | Arduino panel: red CUT takes the machine off the internet, green RESTORE (manager only) brings it back, LEDs show which, buzzer for alerts | flashed; beeps and LEDs checked by hand, real `nmcli` cut not yet run |
 | Breach-notification clocks (TX, TX AG, CA, NY, GDPR, HIPAA) | done, tested |
-| Report for the company: what happened, lost and protected, money at a cost per record, deadlines; figures from the log, summary from a local model (gemma3:4b through Ollama, offline) | done, tested (`test_report`, `test_ui`); about 7 s per report on an RTX 3050 |
+| Report for the company as a PDF: timeline, lost and protected, money at a cost per record, deadlines; figures from the log, summary and next steps from a local model (gemma3:4b through Ollama, offline), every sentence citing its source | done, tested (`test_report`, `test_ui`); about 7 to 8 s per report on an RTX 3050 |
+| Start over: clear a station from setup, the unlock screen or the Team page (two presses) | done, tested (`test_ui`) |
 
 ## Hardware
 
@@ -60,7 +61,7 @@ Events show on every station's Server log within a second.
 
 ## Report
 
-The Report page (F7) writes a report for the company from the station's log: what happened, what was lost and what was protected, money at a cost per record you set, deadlines and next steps. Every figure is computed from the signed log. A model on the same laptop writes the summary paragraphs; nothing is sent anywhere, and any sentence it writes with a number that isn't in the log is dropped.
+The Report page (F7) has a **Request report** button, for the manager and analysts alike. A few seconds later a PDF opens: what happened, a timeline, what was lost and what was protected, money at a cost per record you set, deadlines and next steps. Every figure and the timeline are computed from the signed log. A model on the same laptop writes only the summary and next steps, and each of its sentences has to cite the figures and timeline rows it rests on; a sentence that names anything not in what it cites is dropped. Nothing is sent anywhere.
 
 ```sh
 ollama pull gemma3:4b                                    # once
@@ -68,7 +69,7 @@ ARK_COST_PER_RECORD=160 PANEL=/dev/ttyUSB0 ./station.sh station-a usb
 tools/ark-report station-a --no-ai                       # figures only, from the command line
 ```
 
-Without Ollama the report is still written, from the figures alone. Saved to `station-a/report/report.md`.
+Without Ollama the report is still written, from the figures and timeline. Saved to `station-a/report/report.pdf` and `report.md`.
 
 ## Docs
 

@@ -75,6 +75,8 @@
 #define H_REPORT     25
 #define H_SFILTER    26
 #define H_WRITE      27
+#define H_CLEAR      28   // delete this station's data and start over
+#define H_BACK       29   // back to the name step, nothing written yet
 
 #define RS_NONE     0
 #define RS_RUNNING  1
@@ -215,6 +217,7 @@ class App
   I64 feed_window;        // start of the current rate window
   I64 feed_posted;        // events posted in it
   I64 feed_dropped;
+  I64 clear_armed;        // time() of the first Clear press, 0 if not armed
   I64 report_state;       // RS_ value
   I64 report_started;
   Bool report_warmed;
@@ -2085,6 +2088,17 @@ U0 DrawTeamPage(App *a)
   Text(c, F_BODY, CX0 + 16, ry + 14, "1.  They start ARK on a clean laptop, pick a name and passphrase, then choose Join.", C_TEXT, (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 32);
   Text(c, F_BODY, CX0 + 16, ry + 38, "2.  A request appears here and the panel beeps. They read their six-digit code out loud.", C_TEXT, (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 32);
   Text(c, F_BODY, CX0 + 16, ry + 62, "3.  If it matches, the manager presses Approve. They get the team key and the whole log.", C_TEXT, (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 32);
+
+  y += 166;
+  I64 cw = g_cw - SIDE_W - PANEL_W - 2 * PAD;
+  Card(a, CX0, y, cw, 96);
+  Text(c, F_H2, CX0 + 20, y + 18, "Start over on this laptop", C_TEXT);
+  Text(c, F_SMALL, CX0 + 20, y + 44, "Deletes this station's keys, log, reports and server feed here, then goes back to setup.", C_MUTED, cw - 240);
+  Text(c, F_SMALL, CX0 + 20, y + 62, "Other stations keep their copy of the incident.", C_MUTED, cw - 240);
+  U8 *label = "Clear this station";
+  if (a->clear_armed != 0 && time(NULL) - a->clear_armed <= 3)
+    label = "Press again";
+  Button(a, CX0 + cw - 200, y + 28, 180, 40, label, BTN_RED, H_CLEAR);
 }
 
 U0 DrawNetworkPage(App *a)
@@ -2408,6 +2422,28 @@ U0 DrawSetup(App *a)
   }
   if (a->msg[0] && time(NULL) - a->msg_time <= 8)
     Text(c, F_MED, x, 700, a->msg, a->msg_color, w);
+
+  // A way out: someone who opened an incident by mistake, or lost the
+  // passphrase, can start over without deleting files by hand.
+  I64 by = g_ch - 96;
+  if (a->mode == MODE_NEW_PASS || a->mode == MODE_NEW_PASS2) {
+    Button(a, x, by, 150, 36, "Start over", BTN_GHOST, H_BACK);
+    Text(c, F_SMALL, x + 166, by + 11, "Back to the name. Nothing is saved yet.", C_FAINT);
+  } else if (a->mode != MODE_NEW_NAME) {
+    U8 *label = "Start over";
+    U8 *why = "Deletes this station's keys and log on this laptop. Press twice.";
+    if (a->mode == MODE_UNLOCK) {
+      label = "Clear station";
+      why = "Lost the passphrase? This deletes the station's keys and log here. Press twice.";
+    }
+    Bool armed = a->clear_armed != 0 && time(NULL) - a->clear_armed <= 3;
+    if (armed) {
+      label = "Press again";
+      why = "Press again within 3 seconds to delete everything and start over.";
+    }
+    Button(a, x, by, 150, 36, label, BTN_GHOST, H_CLEAR);
+    Text(c, F_SMALL, x + 166, by + 11, why, C_FAINT, w - 166);
+  }
 }
 
 // ---- whole frame ----------------------------------------------------------
@@ -2638,6 +2674,18 @@ U0 WriteReport(App *a)
   StrCpy(a->report_msg, "");
 }
 
+// Shows the PDF in the desktop's viewer. ARK_OPEN_CMD replaces xdg-open
+// (tests set it to true).
+U0 OpenReportPdf(App *a)
+{
+  U8 *open_cmd = getenv("ARK_OPEN_CMD");
+  if (open_cmd == NULL || open_cmd[0] == 0)
+    open_cmd = "xdg-open";
+  U8 cmd[700];
+  snprintf(cmd, 700, "%s '%s/report/report.pdf' >/dev/null 2>&1 &", open_cmd, a->st->dir);
+  system(cmd);
+}
+
 // Checks whether tools/ark-report has finished.
 U0 PollReport(App *a)
 {
@@ -2650,22 +2698,36 @@ U0 PollReport(App *a)
   if (n > 0 && buf[n - 1] == '\n')
     buf[--n] = 0;
   if (n > 5 && StrNCmp(buf, "done ", 5) == 0) {
-    // "done SECONDS ai|figures NOTE"
-    U8 *rest = buf + 5;
-    U8 *sp = strchr(rest, ' ');
-    U8 secs[16];
-    CopyText(secs, rest, MinI64(16, (sp - rest) + 1));
-    Bool ai = sp != NULL && StrNCmp(sp + 1, "ai", 2) == 0;
-    U8 *note = NULL;
-    if (sp != NULL)
-      note = strchr(sp + 1, ' ');
-    if (ai)
+    // "done SECONDS ai|figures pdf|md NOTE"
+    U8 *words[4];
+    I64 nw = 0;
+    U8 *p = buf + 5;
+    while (nw < 4 && p != NULL) {
+      words[nw++] = p;
+      p = strchr(p, ' ');
+      if (p != NULL && nw < 4)
+        *p++ = 0;
+    }
+    U8 *secs = "?";
+    Bool ai = FALSE, pdf = FALSE;
+    U8 *note = "";
+    if (nw > 0)
+      secs = words[0];
+    if (nw > 1)
+      ai = StrCmp(words[1], "ai") == 0;
+    if (nw > 2)
+      pdf = StrCmp(words[2], "pdf") == 0;
+    if (nw > 3)
+      note = words[3];
+    if (ai && note[0])
+      snprintf(a->report_msg, 256, "Written in %s s. Summary by the local model, figures from the log. %s", secs, note);
+    else if (ai)
       snprintf(a->report_msg, 256, "Written in %s s. Summary by the local model, figures from the log.", secs);
-    else if (note != NULL)
-      snprintf(a->report_msg, 256, "Written in %s s from the figures only.%s", secs, note);
     else
-      snprintf(a->report_msg, 256, "Written in %s s from the figures only.", secs);
+      snprintf(a->report_msg, 256, "Written in %s s from the figures only. %s", secs, note);
     LoadReport(a);
+    if (pdf)
+      OpenReportPdf(a);
     a->report_scroll = 0;
     a->report_state = RS_DONE;
     a->dirty = TRUE;
@@ -2756,15 +2818,15 @@ U0 DrawReportPage(App *a)
   if (a->report_state == RS_RUNNING)
     Button(a, CX0 + cw - 180, y + 20, 160, 36, "Writing...", BTN_OFF, 0);
   else if (a->report_state == RS_DONE)
-    Button(a, CX0 + cw - 180, y + 20, 160, 36, "Write again", BTN_GHOST, H_WRITE);
+    Button(a, CX0 + cw - 180, y + 20, 160, 36, "Request again", BTN_GHOST, H_WRITE);
   else
-    Button(a, CX0 + cw - 180, y + 20, 160, 36, "Write report", BTN_PRIMARY, H_WRITE);
+    Button(a, CX0 + cw - 180, y + 20, 160, 36, "Request report", BTN_PRIMARY, H_WRITE);
 
   y += 92;
   I64 h = g_ch - 20 - y;
   Card(a, CX0, y, cw, h);
   if (a->report_len == 0) {
-    TextMid(c, F_BODY, CX0 + 24, y + 40, "The report shows here. It's also saved as report/report.md in the station directory.", C_FAINT, cw - 48);
+    TextMid(c, F_BODY, CX0 + 24, y + 40, "The report opens as a PDF and shows here. Both are saved in report/ in the station directory.", C_FAINT, cw - 48);
     a->report_max_scroll = 0;
     return;
   }
@@ -2830,6 +2892,57 @@ U0 Lock(App *a)
   } else {
     a->lock_armed = time(NULL);
   }
+}
+
+// Deletes the station directory and goes back to the first setup step.
+// Two presses within 3 seconds, like the lock.
+U0 ClearStation(App *a)
+{
+  if (a->clear_armed == 0 || time(NULL) - a->clear_armed > 3) {
+    a->clear_armed = time(NULL);
+    return;
+  }
+  a->clear_armed = 0;
+  U8 dir[256];
+  CopyText(dir, a->st->dir, 256);
+  if (dir[0] == 0 || strchr(dir, '\'') != NULL) {
+    Say(a, "Can't clear a station whose directory name has a quote in it.", C_RED_FG);
+    return;
+  }
+  StationWipe(a->st);
+  sodium_memzero(a->pass, 128);
+  U8 cmd[600];
+  snprintf(cmd, 600, "rm -rf -- '%s'", dir);
+  if (system(cmd) != 0) {
+    Say(a, "Could not delete the station directory.", C_RED_FG);
+    return;
+  }
+  Free(a->st->log);
+  StationInit(a->st, dir);
+  MemSet(&a->team, 0, sizeof(Team));
+  for (I64 i = 0; i < FIELDS; i++)
+    ClearField(a, i);
+  if (a->feed_fd >= 0)
+    close(a->feed_fd);
+  a->feed_fd = -1;
+  a->feed_off = 0;
+  a->feed_len = 0;
+  a->risk_done = 0;
+  a->selected = -1;
+  a->alerts_acked = 0;
+  a->panel_alerts = 0;
+  a->panel_problems = 0;
+  a->panel_join = FALSE;
+  a->cut_armed = 0;
+  a->lock_armed = 0;
+  a->report_state = RS_NONE;
+  a->report_len = 0;
+  a->report_warmed = FALSE;
+  a->scope_open = FALSE;
+  a->view = V_OVERVIEW;
+  a->mode = MODE_NEW_NAME;
+  a->focus = FLD_SETUP;
+  Say(a, "Station cleared. Start again with your name.", C_GREEN_FG);
 }
 
 // Runs the command in env var `env`, or `fallback`. Returns its exit code.
@@ -3228,6 +3341,12 @@ U0 Act(App *a, I64 id, I64 arg)
     a->server_scroll = 0;
   } else if (id == H_WRITE) {
     WriteReport(a);
+  } else if (id == H_CLEAR) {
+    ClearStation(a);
+  } else if (id == H_BACK) {
+    sodium_memzero(a->pass, 128);
+    a->mode = MODE_NEW_NAME;
+    a->focus = FLD_SETUP;
   }
 }
 

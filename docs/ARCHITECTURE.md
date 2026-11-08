@@ -28,7 +28,7 @@ Each station is one HolyC program that thinks it's talking to a serial port. soc
 | `src/team.HC` | join requests, key grants, heads/sync, peer list | built, tested by hand |
 | `src/deadlines.HC` | breach-notification clocks | built, tested |
 | `tools/ark-watch` | follows the journal (and optionally a web access log) and appends events to a station's feed | tested (`test_watch.py`), run live |
-| `tools/ark-report` | after-incident report: figures from the station's export, summary paragraphs from a local model through Ollama | tested (`test_report.py`), run with gemma3:4b |
+| `tools/ark-report` | after-incident report as PDF and markdown: figures and timeline from the station's export, summary and next steps from a local model through Ollama, each sentence citing what it rests on | tested (`test_report.py`), run with gemma3:4b |
 | `tools/hooks/ark-shell.*` | bash, zsh and fish hooks that log each typed command to the journal | tested by hand |
 | `tests/render_demo.HC`, `tools/make-demo-gif.py` | run both stations through the demo story and turn the screens into `docs/demo.gif` | run |
 | `tools/drill.sh` | a rehearsal intrusion for demos: logs attacker-style commands without running them | |
@@ -70,7 +70,7 @@ On the wire and on disk an entry travels as `'E' epoch(U16) Seal(record)`, seale
 | `secrets` | salt + secretbox(identity keypair, name, team keys), key from the passphrase via Argon2id (libsodium interactive limits, 64 MiB). Mode 0600. |
 | `log` | every accepted message exactly as received, each with a 4-byte length. Loading replays them through the same receive path as the radio. |
 | `feed` | written by `tools/ark-watch`: one server event per line, read by the station. Mode 0600. |
-| `report/report.md` | the last report, plain text, plus a timestamped copy of each one. Mode 0600. `report/export.tsv` exists only while `ark-report` reads it. |
+| `report/report.pdf`, `report/report.md` | the last report, plus a timestamped copy of each one. Mode 0600. `report/export.tsv` exists only while `ark-report` reads it. |
 
 A flipped byte in `log` makes that record fail to decrypt, so it's counted as damaged. The rest of that author's chain then shows `CHAIN BROKEN`, so the screen points at where the damage starts.
 
@@ -117,17 +117,21 @@ station: PollFeed -> KIND_EVENT entry, signed -> relay -> every station
 ## Report
 
 ```
-station: Write report -> ExportReport -> DIR/report/export.tsv (verified entries, decrypted)
-                      -> tools/ark-report DIR &      (background, the window keeps running)
-ark-report: figures from the export ----------------> report.md: every number
-            prompt (figures + 40 log lines) -> Ollama on 127.0.0.1 (gemma3:4b)
-            JSON answer -> number guard ------------> report.md: summary paragraphs, marked
-station: PollReport reads DIR/report/status -> shows report.md on the Report page
+station: Request report -> ExportReport -> DIR/report/export.tsv (verified entries, decrypted)
+                        -> tools/ark-report DIR &      (background, the window keeps running)
+ark-report: figures F1..Fn and timeline T1..Tn, all from the export
+            prompt (F + T, attacker's quoted text hidden) -> Ollama on 127.0.0.1 (gemma3:4b)
+            summary + next steps, each sentence citing F/T -> citation check
+            -> report.pdf and report.md
+station: PollReport reads DIR/report/status -> opens report.pdf, shows report.md on the page
 ```
 
 - **The export** is one record per line, tab separated: `incident`, `opened`, `station`, `phase`, `integrity`, then `member`, `asset` (latest state per system), `clock`, `entry` and `event` (with its risk, why it was flagged and who reported it). Only entries that passed their checks go in. Risk and deadlines are worked out by the station, so the tool uses the same rules as the screen.
-- **Figures** are computed in Python: first suspicious event, report, cut and restore with the time between them, records lost (EXFILTRATED, ENCRYPTED), protected (CLEAN, CONTAINED) and not confirmed (SUSPECTED), public addresses, deadlines. Money is records times `ARK_COST_PER_RECORD`; without it there are no money figures.
-- **The model** gets the figures as sentences and up to 40 server events and 15 team notes, inside a block it is told is evidence, not instructions. It answers in a fixed JSON shape (`summary`, `attack`, `response`, `next_steps`), which Ollama enforces.
-- **The number guard** drops any sentence holding a number that isn't in the figures (or a log line's time stamp), and any domain that isn't in the log. Numbers inside log text don't count as allowed, because the attacker typed them.
-- **Without a model** (Ollama down, model missing, more than 90 s) the report is written from the figures and says why.
-- `ark-report --warm` loads the model and runs one token through it. The station runs it the first time the Report page opens, so pressing the button doesn't wait for a cold load (about 10 s from disk).
+- **Figures** (F1, F2...) are computed in Python: first suspicious event, report, cut and restore with the time between them, records lost (EXFILTRATED, ENCRYPTED), protected (CLEAN, CONTAINED) and not confirmed (SUSPECTED), public addresses, deadlines. Money is records times `ARK_COST_PER_RECORD`; without it there are no money figures.
+- **The timeline** (T1, T2...) is written by code: suspicious events, events by the accounts behind them, logins from outside addresses, and what the team did (reports, scope, cut, restore). Staff logins from inside aren't in it.
+- **The model writes two things:** a 3-sentence summary and 3 or 4 next steps. Each sentence ends with the F and T numbers it rests on, like `[F4, T12]`. The JSON shape is flat (lists of strings), because gemma3:4b loops inside arrays of objects.
+- **The citation check** drops a sentence that cites nothing or an item that doesn't exist, or that holds a number, domain, address, account, host or system that isn't in the items it cites. Ordinals ("December 7th") are read as numbers; digits inside a name (FS-01) are checked as part of the name.
+- **Attacker text** reaches the model only as timeline rows, with quoted strings replaced by `<quoted text>`. The report's own timeline shows the full command.
+- **The PDF** is built with reportlab: stat boxes, summary, timeline, lost and protected tables, money, deadlines, next steps, the numbered figures. Sections the model wrote say so in their heading. Without reportlab only report.md is written.
+- **Without a model** (Ollama down, model missing, more than 90 s) the report is written from the figures and timeline and says why.
+- `ark-report --warm` loads the model and runs one token through it. The station runs it the first time the Report page opens, so the button doesn't wait for a cold load (about 10 s from disk).
