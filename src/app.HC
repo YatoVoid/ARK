@@ -2830,7 +2830,7 @@ U0 DrawNetworkPage(App *a)
   U8 count[48];
   snprintf(count, 48, "%s, %ld entries", a->port, a->st->log->count);
   Text(c, F_SMALL, lx - MinI64(TextWidth(c, F_SMALL, count), colw) / 2, ty + 46, count, C_FAINT, colw);
-  Text(c, F_H2, mx - TextWidth(c, F_H2, "Untrusted relay") / 2, ty, "Untrusted relay", C_TEXT);
+  Text(c, F_H2, mx - TextWidth(c, F_H2, "Relay") / 2, ty, "Relay", C_TEXT);
   Text(c, F_SMALL, mx - TextWidth(c, F_SMALL, "Arduino UNO Q, own Wi-Fi") / 2, ty + 26, "Arduino UNO Q, own Wi-Fi", C_MUTED);
   Badge(a, mx - (TextWidth(c, F_LABEL, "SEES ONLY CIPHERTEXT") + 14) / 2, ty + 56, "SEES ONLY CIPHERTEXT", C_PURPLE);
   Text(c, F_H2, ox - TextWidth(c, F_H2, "Other stations") / 2, ty, "Other stations", C_TEXT);
