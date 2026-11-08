@@ -142,6 +142,15 @@ Lock each station with F12 twice when you're done. Stop the watcher and the hub 
 
 Laptop A reaches the relay over USB. Laptop B reaches it over a Wi-Fi network the team controls, never the company network.
 
+**The short way.** Each laptop has one script that installs missing packages, builds ARK and opens its window:
+
+```sh
+./laptop-a.sh                    # laptop A: UNO Q and panel on USB; starts the model and the relay, prints the relay's address
+./laptop-b.sh 10.147.184.235     # laptop B: the address laptop A printed
+```
+
+`laptop-a.sh` keeps CUT and RESTORE as stand-ins unless `ARK_REAL_CUT=1` is set. If the UNO Q isn't on Wi-Fi yet, set `WIFI_SSID` and `WIFI_PASS` and it joins that network. A phone plugged in for tethering is ignored. The panel isn't flashed by the script; do that once as below. The steps it runs are spelled out next.
+
 **Once, while you still have internet:**
 
 ```sh
