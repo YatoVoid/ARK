@@ -525,6 +525,38 @@ I32 Main(I32 argc, U8 **argv)
     Free(zm);
   }
 
+  // Alerts are the manager's. The manager pressing red, or an alert from the
+  // manager's station, never puts the manager's prompt on another screen.
+  {
+    for (I64 i = 0; i < a->st->log->count; i++)
+      StationReceive(m->st, msg, MakeMessage(a->st, &a->st->log->entries[i], msg));
+    a->view = V_LOG;
+    Draw(a);
+    Check(!Click(a, H_KIND, KIND_ALERT) && !CanPost(a, KIND_ALERT), "the manager has no Alert button to alert themself");
+    len = Post(a->st, KIND_ALERT, PHASE_CONTAIN, "manager alert from an older build", 33, msg);
+    StationReceive(m->st, msg, len);
+    I64 was_cut = IsCut(a);
+    if (!was_cut) {
+      a->cut_armed = time(NULL);
+      CutPressed(a);
+    }
+    for (I64 i = 0; i < a->st->log->count; i++)
+      StationReceive(m->st, msg, MakeMessage(a->st, &a->st->log->entries[i], msg));
+    for (I64 v = 0; v < VIEWS; v++) {
+      m->view = v;
+      Draw(m);
+      Check(!Click(m, H_ACK) && UnackedAlerts(m) == 0 && !IsAdmin(m->st), "the analyst never gets the manager's Acknowledge");
+    }
+    m->view = V_OVERVIEW;
+    Draw(m);
+    Check(!Click(m, H_CUT) || !IsCut(m), "and gets no kill switch of their own");
+    if (!was_cut)
+      RestoreNetwork(a, "test");
+    for (I64 i = 0; i < a->st->log->count; i++)
+      StationReceive(m->st, msg, MakeMessage(a->st, &a->st->log->entries[i], msg));
+    a->view = V_OVERVIEW;
+  }
+
   // Channels and what each role may do. Marcus is IT, on the floor.
   for (I64 i = 0; i < m->st->log->count; i++)
     StationReceive(a->st, msg, MakeMessage(m->st, &m->st->log->entries[i], msg));

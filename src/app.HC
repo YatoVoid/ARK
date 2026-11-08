@@ -442,8 +442,12 @@ Entry *NewestAlert(App *a)
   return best;
 }
 
+// Alerts are for the manager. Other stations see them in the chat, but
+// never the card, the Acknowledge button or the buzzer.
 I64 UnackedAlerts(App *a)
 {
+  if (!IsAdmin(a->st))
+    return 0;
   return MaxI64(0, AlertCount(a) - a->alerts_acked);
 }
 
@@ -855,7 +859,7 @@ Bool CanPost(App *a, I64 kind)
     return Can(a, CAN_FLOOR_POST);
   if (kind == KIND_COMMAND)
     return Can(a, CAN_CMD_POST);
-  return kind == KIND_ALERT;
+  return kind == KIND_ALERT && !IsAdmin(a->st);
 }
 
 Bool PassesFilter(App *a, Entry *e, U8 *text)
@@ -3859,7 +3863,8 @@ U0 ReportEvent(App *a, I64 idx)
     return;
   Entry *e = &log->entries[idx];
   Event ev;
-  if (e->kind != KIND_EVENT || !EventFromBody(e->body, &ev) || ReportOf(a, e) != NULL || !Can(a, CAN_FLOOR_POST))
+  if (e->kind != KIND_EVENT || !EventFromBody(e->body, &ev) || ReportOf(a, e) != NULL || !Can(a, CAN_FLOOR_POST) ||
+      IsAdmin(a->st))
     return;
   U8 ref[12], t[8], body[BODY_MAX];
   EntryRef(e, ref);
@@ -4226,7 +4231,7 @@ U0 Act(App *a, I64 id, I64 arg)
     RestoreNetwork(a, "on screen");
   } else if (id == H_ACK) {
     a->alerts_acked = AlertCount(a);
-  } else if (id == H_ALERT_MGR) {
+  } else if (id == H_ALERT_MGR && !IsAdmin(a->st)) {
     a->kind = KIND_ALERT;
     if (a->view != V_OVERVIEW && a->view != V_LOG)
       a->view = V_OVERVIEW;
@@ -4375,7 +4380,7 @@ U0 OnKey(App *a, I64 sym, I64 mod)
     a->focus = FLD_COMPOSE;
   } else if (sym == KEY_F4) {
     OpenScope(a);
-  } else if (sym == KEY_F5) {
+  } else if (sym == KEY_F5 && !IsAdmin(a->st)) {
     a->view = V_LOG;
     a->kind = KIND_ALERT;
     a->focus = FLD_COMPOSE;
@@ -4434,7 +4439,9 @@ U0 PanelUpdate(App *a, Bool resend)
   if (a->panel_fd < 0)
     return;
   I64 problems = ProblemCount(a);
-  I64 alerts = AlertCount(a);
+  I64 alerts = 0;
+  if (IsAdmin(a->st))
+    alerts = AlertCount(a);
   if (alerts > a->panel_alerts || problems > a->panel_problems)
     PanelSend(a, "A\n");
   else if (a->team.join_pending && !a->panel_join)
