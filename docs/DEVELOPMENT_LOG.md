@@ -98,3 +98,7 @@ Two more hcc 0.0.15 crashes (segfault in the compiler, no message):
 - A `#define` whose body names a variable or function, e.g. `#define CW g_cw`. Macros may only expand to literals and other macros.
 
 Both were found by bisecting the include list with a stub `Main`. A build that pipes hcc through `head` hides the crash, because the pipe's exit code is head's.
+
+## 2026-11-07 night, demo runbook and GIF
+
+`docs/DEMO.md` holds every command: setup, clean slate, relay, one or two laptops, feeding the server log, the five-step story, rehearsing with stand-in cut commands. `docs/demo.gif` is drawn from the code: `tests/render_demo.HC` runs a manager and a worker station through that story in one process and dumps each screen, and `tools/make-demo-gif.py` adds the hardware and which links each step uses. Rendering it showed the chat log printing an alert's internal `[ref]`; it's hidden now.

@@ -29,6 +29,7 @@ Each station is one HolyC program that thinks it's talking to a serial port. soc
 | `src/deadlines.HC` | breach-notification clocks | built, tested |
 | `tools/ark-watch` | follows the journal (and optionally a web access log) and appends events to a station's feed | tested (`test_watch.py`), run live |
 | `tools/hooks/ark-shell.*` | bash, zsh and fish hooks that log each typed command to the journal | tested by hand |
+| `tests/render_demo.HC`, `tools/make-demo-gif.py` | run both stations through the demo story and turn the screens into `docs/demo.gif` | run |
 | `tools/drill.sh` | a rehearsal intrusion for demos: logs attacker-style commands without running them | |
 | `firmware/panel/panel.ino` | Arduino UNO: red CUT and green RESTORE buttons, LEDs for internet on/cut, buzzer for alerts | compiles; earlier version tested on hardware |
 

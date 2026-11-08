@@ -9,6 +9,10 @@ ARK is written in HolyC (compiled with [hcc](https://github.com/Jamesbarford/hol
 > "An idiot admires complexity, a genius admires simplicity."
 > Terry A. Davis
 
+![A worker reports a suspicious server command, the manager's panel buzzes, the manager cuts the internet and later restores it](docs/demo.gif)
+
+How to run this yourself, from a clean slate: [docs/DEMO.md](docs/DEMO.md).
+
 ## Status
 
 Built for HackUTD (Winstead PC track: Cyber Incident Response Dashboard), November 2026. Work in progress.
@@ -55,6 +59,7 @@ Events show on every station's Server log within a second.
 
 ## Docs
 
+- [docs/DEMO.md](docs/DEMO.md): every command for setup, a clean demo, one or two laptops, and the story to show
 - [docs/BUILDING.md](docs/BUILDING.md): dependencies, building, flashing
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): how the pieces fit
 - [docs/DECISIONS.md](docs/DECISIONS.md): why it is built this way

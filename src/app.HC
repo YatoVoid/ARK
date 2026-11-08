@@ -527,6 +527,14 @@ U32 RemainingColor(I64 left)
   return C_TEXT;
 }
 
+// The alert text without the "[ref] " that ties a report to its event.
+U8 *AlertText(U8 *body)
+{
+  if (body[0] == '[' && StrLen(body) > 11 && body[9] == ']' && body[10] == ' ')
+    return body + 11;
+  return body;
+}
+
 // The text of an entry as one line, without time or author.
 U0 EntryText(Log *log, Entry *e, U8 *out)
 {
@@ -560,6 +568,8 @@ U0 EntryText(Log *log, Entry *e, U8 *out)
     } else {
       snprintf(out, BODY_MAX + 128, "%s", e->body);
     }
+  } else if (e->kind == KIND_ALERT) {
+    StrCpy(out, AlertText(e->body));
   } else {
     StrCpy(out, e->body);
   }
@@ -630,14 +640,6 @@ I64 EventCount(App *a)
     if (log->entries[i].kind == KIND_EVENT)
       n++;
   return n;
-}
-
-// The alert text without the "[ref] " that ties a report to its event.
-U8 *AlertText(U8 *body)
-{
-  if (body[0] == '[' && StrLen(body) > 11 && body[9] == ']' && body[10] == ' ')
-    return body + 11;
-  return body;
 }
 
 // Works out the risk of entries added since the last call, then which
