@@ -18,6 +18,7 @@ run test_crypto
 rm -rf build/tmp-log && mkdir -p build/tmp-log
 run test_log
 run test_deadlines
+SDL_VIDEODRIVER=offscreen run test_ui
 
 tmp=$(mktemp -d)
 socat "pty,raw,echo=0,link=$tmp/a" "pty,raw,echo=0,link=$tmp/b" &

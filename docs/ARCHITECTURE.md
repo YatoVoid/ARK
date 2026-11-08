@@ -17,14 +17,13 @@ Each station is one HolyC program that thinks it's talking to a serial port. soc
 | `src/util.HC` | `MinI64`, `MaxI64`, `usleep` | built |
 | `src/crypto.HC` | libsodium bindings and the wrappers `Sign`, `Verify`, `Seal`, `Open`, `Hash`, `SealKeyTo`, `OpenSealedKey`, `Same` | built, tested |
 | `src/link.HC` | serial port, hex lines, splitting and joining frames | built, tested |
-| `src/sdl2.HC` | SDL2 and SDL2_ttf bindings | built |
+| `src/sdl2.HC` | SDL2 bindings: window, events, key codes | built |
 | `relay/hub.py` | UNO Q: TCP line hub | built, tested over Wi-Fi |
 | `src/log.HC` | entries, per-author hash chains, validity check, display order | built, tested |
 | `src/station.HC` | identity, team keys, passphrase-sealed secrets file, log file, posting and receiving | built, tested |
-| `src/team.HC` | enrollment, roles, key rotation | planned |
-| `src/main.HC` | the station: setup, unlock, screen, input, network loop, panel | built, tested by hand |
-| `src/screen.HC` | 80x50 text grid in the 16 VGA colors, scaled to the window | built |
-| `src/font.HC` | TempleOS 8x8 system font as bytes | built |
+| `src/main.HC` | arguments, font lookup, the event loop | built |
+| `src/app.HC` | the station window: setup screens, seven pages, control panel, input, actions, panel and link polling | built, tested (`test_ui`) |
+| `src/canvas.HC` | 1440x900 pixel buffer, rounded boxes, text from glyphs SDL2_ttf renders once, scaling to the window | built |
 | `src/team.HC` | join requests, key grants, heads/sync, peer list | built, tested by hand |
 | `src/deadlines.HC` | breach-notification clocks | built, tested |
 | `firmware/panel/panel.ino` | Arduino UNO: approve and panic buttons, green/red LEDs, buzzer | approve button and LEDs tested |
@@ -66,3 +65,16 @@ On the wire and on disk an entry travels as `'E' epoch(U16) Seal(record)`, seale
 | `log` | every accepted message exactly as received, each with a 4-byte length. Loading replays them through the same receive path as the radio. |
 
 A flipped byte in `log` makes that record fail to decrypt, so it's counted as damaged. The rest of that author's chain then shows `CHAIN BROKEN`, so the screen points at where the damage starts.
+
+## Station window
+
+The window is one 1440x900 pixel buffer, scaled to fit with the aspect ratio kept. It is redrawn from scratch when something happens (input, a message, the panel) and once a second otherwise, so remaining times and who is online stay current.
+
+| Area | What it shows |
+|---|---|
+| Sidebar | incident title, day, phase; pages with counts (entries, systems, nearest deadline, pending join); your name and key fingerprint |
+| Top bar | log search, the four phases (clicking one logs the change for everyone), relay and log-integrity status |
+| Control panel | the same controls as the hardware panel: APPROVE, PANIC, and status lights |
+| Pages | Overview, Incident log, Scope, Breach clocks, Team, Network, Guide |
+
+Every frame records the clickable regions it drew. A click looks them up, newest first, so whatever was drawn on top wins. `tests/test_ui.HC` uses the same lookup to click through setup, posting, scope, search, approval and panic.

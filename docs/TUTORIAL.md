@@ -23,17 +23,21 @@ Expected: 13 `ok` lines and `all passed`.
 
 ## Part 2: a window with real text
 
-`src/sdl2.HC` declares the SDL2 and SDL2_ttf functions ARK uses. The only trick is `TTF_RenderUTF8_Blended`, which takes an `SDL_Color` struct by value. On x86_64 a 4-byte struct is passed in one integer register, so it's declared as `U32` and packed with red in the low byte:
+`src/canvas.HC` declares the SDL2_ttf functions ARK uses. The only trick is `TTF_RenderGlyph32_Blended`, which takes an `SDL_Color` struct by value. On x86_64 a 4-byte struct is passed in one integer register, so it's declared as `U32` and packed with red in the low byte:
 
 ```holyc
 U32 Color(I64 r, I64 g, I64 b) { return r | (g << 8) | (b << 16) | (0xFF << 24); }
 ```
 
+ARK renders each printable character once at startup and keeps only its alpha values. Drawing text after that is a loop that blends those values into the pixel buffer, so no FreeType call happens per frame.
+
 ```sh
-hcc tests/spike_window.HC -o build/spike_window && ./build/spike_window
+hcc tests/render_views.HC -o build/render_views
+SDL_VIDEODRIVER=offscreen ./build/render_views
+magick build/ui-overview.ppm overview.png
 ```
 
-Expected: a dark window with grey text. Typing shows up on the second line.
+Expected: `rendered`, and an image of the Overview page with a sample incident.
 
 ## Part 3: talking over a serial port
 

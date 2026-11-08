@@ -56,3 +56,17 @@ Feedback from the first hands-on run: the look works, but a new user can't tell 
 - Scope entries in the log read as a sentence: "HR-DB, 4120 PII records of TX residents, EXFILTRATED".
 - The phase line under the note prompt shows all four phases with the current one highlighted.
 - Fixed deadline citations being cut off at the right edge.
+
+## 2026-11-07 evening, the manager dashboard
+
+A Figma design for ARK (navy, sidebar, control panel) replaced the TempleOS screen. Decision 13 explains why. Built as `src/canvas.HC` (drawing) and `src/app.HC` (pages and input). `src/screen.HC` and `src/font.HC` are gone.
+
+Checked without clicking through a window: `tests/render_views.HC` draws every page from a sample incident to `build/ui-*.ppm` under `SDL_VIDEODRIVER=offscreen`, and the images were read one by one. That caught phase labels overflowing their buttons, the scope form's footer overlapping its border, short search results stuck to the bottom of the list, and badges running past the card edge.
+
+`tests/test_ui.HC` then drives the window like a user. It found two real bugs on its first run:
+- After the incident opened, keyboard focus stayed on the setup field, so the first note typed on the Overview went nowhere.
+- Clicking a data-type tile dropped focus, after which Enter no longer saved the scope form.
+
+Two more hcc problems:
+- **A pointer argument read from a register a call already reused.** In `Clip(c, ...)`, the first `c->clip_x0 = MaxI64(x, 0)` was stored through `%rdi`, which by then held `x`. It crashed. The fix is to compute into locals first. A scan of the disassembly (a store through an argument register after a call, with no reload) found no other case in ARK.
+- **`F64` through `extern "c"` doesn't work.** `sqrt` from libm returned 0, so every rounded corner came out square. Corner coverage is now sampled with integers.

@@ -52,7 +52,7 @@ TCP instead of UDP: TCP doesn't drop frames, and a phone hotspot (used while dev
 
 The 250-byte frames from decision 5 stay. TCP doesn't need them, but they cap the line length, which gives the hub a simple rule for rejecting garbage.
 
-## 11. TempleOS look: white, 16 colors, 8x8 font, 80x50 grid
+## 11. TempleOS look: white, 16 colors, 8x8 font, 80x50 grid (replaced by decision 13)
 
 The screen copies TempleOS: a white background, the VGA palette, and Terry's system font on a fixed 80x50 grid, scaled to whatever size the window is. Reasons:
 - **Readable under stress.** Dark blue on white is about 12:1 contrast. Status colors are only used as backgrounds behind black or white text, because VGA green and cyan as text on white fail WCAG AA.
@@ -81,3 +81,15 @@ Left out on purpose:
 - SEC Form 8-K Item 1.05. It starts at a materiality decision, which ARK doesn't record.
 
 Treating ENCRYPTED as a trigger is a cautious choice. Whether ransomware encryption without exfiltration counts as a breach depends on the law and the facts. The screen says "Not legal advice" next to the clocks.
+
+## 13. A dashboard for managers instead of the TempleOS screen
+
+The TempleOS screen tested well for looks and badly for use. People couldn't tell what to type, and the information a manager wants first (the nearest legal deadline, what was hit, who is online) was spread over a dense text grid. The new window follows a Figma design made for ARK: navy background, Inter and JetBrains Mono, a sidebar of pages and a control panel that mirrors the hardware.
+
+- **Dark on purpose.** Incident rooms run at night and on projectors. Body text is #E6EBF5 on #0B1020, above 15:1. Secondary text is #A3AEC6, above 8:1.
+- **The deadline comes first.** The Overview opens on the nearest notice deadline in large type, then affected systems and a short list of things waiting on you.
+- **Forms instead of prompts.** Adding a system is one form with every field and its choices visible, each explained in a line.
+- **The phase belongs to the incident.** Clicking a phase posts a signed note, so every station shows the same phase and the change is in the record.
+- **Fonts are bundled** (SIL OFL, in `assets/fonts`), so the window looks the same on any laptop. SDL2_ttf renders each glyph once at startup; drawing is then plain pixel copies.
+
+What this gives up: decision 11's "no rendering library to trust". SDL2_ttf and FreeType are back. They only ever see ARK's own strings and the bundled fonts, never network input as font data.
