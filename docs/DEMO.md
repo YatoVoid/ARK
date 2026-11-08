@@ -106,7 +106,7 @@ hcc src/main.HC -o build/ark
 ./station.sh station-b wifi 10.147.184.235
 ```
 
-Don't press red on laptop B: its link to the relay is Wi-Fi, so cutting its network cuts it off the team too.
+Laptop B has no CUT button: its link to the relay is Wi-Fi, so cutting its network would cut it off the team too. The kill switch is the manager's; B sends an alert instead.
 
 ## First start: incident and join
 
@@ -145,7 +145,7 @@ sudo commands, SSH and su logins and failed passwords are picked up from the jou
 2. **On B,** filter to Suspicious and click `cat /etc/shadow`. The panel underneath shows who ran it, where, and why it was flagged.
 3. **On B,** press **Report to manager**. A's panel beeps three times and the alert sits at the top of A's control panel. B shows the row as REPORTED.
 4. **On A,** press **Acknowledge**, then the red button. The red LED lights, the top bar reads **Internet: CUT**, and a signed entry tells everyone. Chat between A and B keeps working.
-5. **On A,** press green once "backups are done". The green LED lights and the internet comes back. Only the manager's station can do this.
+5. **On A,** press green once "backups are done". The green LED lights and the internet comes back. Only the manager's station has the kill switch, so only it restores.
 6. **On A (or B),** open **Report** (F7) and press **Request report**. In about 8 seconds the PDF opens: summary, timeline, records lost and protected, the money estimate, deadlines and next steps. The summary and next steps were written by gemma3:4b on the laptop, and each sentence ends with the key figures and timeline rows it cites; everything else comes straight from the log. Saved as `station-a/report/report.pdf`.
 
 Before the steps, record what was hit on the Scope page (F4), for example `FS-01`, PII, TX, 4120, ENCRYPTED and `NAS-02`, OTHER, 18000, CLEAN. The report's lost and protected figures come from there.

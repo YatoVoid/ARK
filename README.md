@@ -26,7 +26,7 @@ Built for HackUTD (Winstead PC track: Cyber Incident Response Dashboard), Novemb
 | Relay hub on an Arduino UNO Q, stations over USB and Wi-Fi | done, tested over real Wi-Fi |
 | Station window: overview, server log, chat log, scope form, breach clocks, team, network, guide, on-screen control panel; resizable, text drawn at screen resolution | done, tested (`test_ui`), rendered at 1366x768 to 2560x1440 |
 | Server log: shell commands, sudo, logins, failed logins and web requests from `tools/ark-watch`, flagged by attack-step rules, reported to the manager in one click | done, tested (`test_ui`, `test_watch`); watcher tested live on Arch |
-| Arduino panel: red CUT takes the machine off the internet, green RESTORE (manager only) brings it back, LEDs show which, buzzer for alerts | flashed; beeps and LEDs checked by hand, real `nmcli` cut not yet run |
+| Arduino panel: red CUT takes the machine off the internet, green RESTORE brings it back (manager's station only), LEDs show which, buzzer for alerts | flashed; beeps and LEDs checked by hand, real `nmcli` cut not yet run |
 | Breach-notification clocks (TX, TX AG, CA, NY, GDPR, HIPAA) | done, tested |
 | Report for the company as a PDF: timeline, lost and protected, money at a cost per record, deadlines; figures from the log, summary and next steps from a local model (gemma3:4b through Ollama, offline), every sentence citing its source | done, tested (`test_report`, `test_ui`); about 7 to 8 s per report on an RTX 3050 |
 | Start over: clear a station from setup, the unlock screen or the Team page (two presses) | done, tested (`test_ui`) |

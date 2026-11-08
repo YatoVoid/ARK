@@ -133,6 +133,21 @@ I32 Main(I32 argc, U8 **argv)
   Shot(a, "cut");
   a->view = V_NETWORK;
   Shot(a, "cut-network");
+  // The same moment on the member's station, then the member asking for a phase.
+  for (I64 i = 0; i < a->st->log->count; i++)
+    StationReceive(b, m2, MakeMessage(a->st, &a->st->log->entries[i], m2));
+  Station *mgr = a->st;
+  a->st = b;
+  a->view = V_OVERVIEW;
+  Shot(a, "member-overview");
+  a->view = V_NETWORK;
+  Shot(a, "member-network");
+  a->st = mgr;
+  U8 *ask = "Asks to move the response to ERADICATE.";
+  StationReceive(a->st, m2, Post(b, KIND_ALERT, PHASE_CONTAIN, ask, StrLen(ask), m2));
+  a->view = V_OVERVIEW;
+  Shot(a, "phase-ask");
+  a->alerts_acked = AlertCount(a);
   a->view = V_OVERVIEW;
   OpenScope(a);
   StrCpy(a->fields[FLD_ASSET].text, "Payroll share");

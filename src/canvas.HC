@@ -70,8 +70,8 @@ class Font
 #define F_MED    2   // Inter Medium 14
 #define F_LABEL  3   // Inter SemiBold 11, for caps labels
 #define F_H2     4   // Inter SemiBold 15
-#define F_H1     5   // Inter SemiBold 22
-#define F_BIG    6   // Inter Bold 40
+#define F_H1     5   // Fira Sans Condensed SemiBold 27
+#define F_BIG    6   // Fira Sans Condensed Bold 50
 #define F_MONO   7   // JetBrains Mono 12
 #define F_BTN    8   // Inter Bold 14
 #define F_SEMI   9   // Inter SemiBold 13
@@ -79,10 +79,10 @@ class Font
 
 U8 *g_font_file[FONTS] = {
   "Inter-Regular.ttf", "Inter-Regular.ttf", "Inter-Medium.ttf", "Inter-SemiBold.ttf",
-  "Inter-SemiBold.ttf", "Inter-SemiBold.ttf", "Inter-Bold.ttf", "JetBrainsMono-Regular.ttf",
+  "Inter-SemiBold.ttf", "FiraSansCondensed-SemiBold.ttf", "FiraSansCondensed-Bold.ttf", "JetBrainsMono-Regular.ttf",
   "Inter-Bold.ttf", "Inter-SemiBold.ttf"
 };
-I64 g_font_size[FONTS] = {12, 13, 14, 11, 15, 22, 40, 12, 14, 13};
+I64 g_font_size[FONTS] = {12, 13, 14, 11, 15, 27, 50, 12, 14, 13};
 
 class Canvas
 {
@@ -107,20 +107,25 @@ class Canvas
 #define C_TEXT      0xFFE6EBF5
 #define C_MUTED     0xFFA3AEC6
 #define C_FAINT     0xFF8592AD
-#define C_CYAN      0xFF22D3EE
-#define C_CYAN_FG   0xFF67E8F9
-#define C_GREEN     0xFF22C55E
-#define C_GREEN_FG  0xFF86EFAC
-#define C_GREEN_BTN 0xFF15803D
-#define C_GREEN_DK  0xFF14532D
-#define C_AMBER     0xFFF59E0B
-#define C_AMBER_FG  0xFFFCD34D
-#define C_RED       0xFFEF4444
-#define C_RED_FG    0xFFFCA5A5
-#define C_RED_BTN   0xFFB91C1C
-#define C_RED_DK    0xFF7F1D1D
-#define C_PURPLE    0xFFA78BFA
-#define C_PURPLE_FG 0xFFC4B5FD
+#define C_CYAN      0xFFE8E1CC
+#define C_CYAN_FG   0xFFF2ECDC
+#define C_GREEN     0xFF4DAF7C
+#define C_GREEN_FG  0xFF9CD5B3
+#define C_GREEN_BTN 0xFF2E7D55
+#define C_GREEN_DK  0xFF1D4F37
+#define C_AMBER     0xFFE3B341
+#define C_AMBER_FG  0xFFF0D07F
+#define C_RED       0xFFE0483B
+#define C_RED_FG    0xFFF2A79E
+#define C_RED_BTN   0xFFB7281D
+#define C_RED_DK    0xFF6E1A14
+#define C_PURPLE    0xFF8FA7D6
+#define C_PURPLE_FG 0xFFBACBEA
+// Phases have their own hues, kept apart from the severity colors above.
+#define C_DETECT    0xFF6FA0E8
+#define C_CONTAIN   0xFFEE8A3C
+#define C_ERADICATE 0xFFB18AE6
+#define C_RECOVER   0xFF45B9AE
 
 // a out of 255 of color c over color under, as one opaque color.
 U32 Mix(U32 c, U32 under, I64 a)
@@ -382,6 +387,85 @@ U0 VLine(Canvas *c, I64 x, I64 y, I64 h, U32 color)
 U0 Dot(Canvas *c, I64 cx, I64 cy, I64 d, U32 color)
 {
   Round(c, cx - d / 2, cy - d / 2, d, d, d / 2, color);
+}
+
+// ---- images ---------------------------------------------------------------
+
+// Icons drawn by tools/make-icons.py: "ARKIMG1\n", width and height as
+// little-endian U32, then RGBA bytes. Kept this simple so nothing needs a
+// PNG decoder.
+class Image
+{
+  I64 w, h;
+  U8 *rgba;               // NULL if the file was missing or bad
+};
+
+Bool LoadImage(Canvas *c, U8 *name, Image *img)
+{
+  img->w = 0;
+  img->h = 0;
+  img->rgba = NULL;
+  U8 path[640];
+  snprintf(path, 640, "%s/../icons/%s.img", c->font_dir, name);
+  I32 fd = open(path, O_RDONLY);
+  if (fd < 0)
+    return FALSE;
+  U8 head[16];
+  I64 got = read(fd, head, 16);
+  I64 w = head[8] | head[9] << 8 | head[10] << 16 | head[11] << 24;
+  I64 h = head[12] | head[13] << 8 | head[14] << 16 | head[15] << 24;
+  if (got != 16 || StrNCmp(head, "ARKIMG1\n", 8) != 0 || w <= 0 || h <= 0 || w > 1024 || h > 1024) {
+    close(fd);
+    return FALSE;
+  }
+  I64 size = w * h * 4, n = 0;
+  U8 *buf = MAlloc(size);
+  while (n < size) {
+    got = read(fd, buf + n, size - n);
+    if (got <= 0)
+      break;
+    n += got;
+  }
+  close(fd);
+  if (n != size) {
+    Free(buf);
+    return FALSE;
+  }
+  img->w = w;
+  img->h = h;
+  img->rgba = buf;
+  return TRUE;
+}
+
+// Draws the image into a size x size unit square, box-filtered so it stays
+// smooth at any window scale. Missing images draw nothing.
+U0 DrawImage(Canvas *c, Image *img, I64 x, I64 y, I64 size)
+{
+  if (img->rgba == NULL)
+    return;
+  I64 x0 = Px(x), y0 = Px(y), d = Px(x + size) - x0;
+  if (d <= 0)
+    return;
+  for (I64 dy = 0; dy < d; dy++) {
+    I64 sy0 = dy * img->h / d, sy1 = MaxI64((dy + 1) * img->h / d, sy0 + 1);
+    for (I64 dx = 0; dx < d; dx++) {
+      I64 sx0 = dx * img->w / d, sx1 = MaxI64((dx + 1) * img->w / d, sx0 + 1);
+      I64 r = 0, g = 0, b = 0, al = 0, cnt = 0;
+      for (I64 sy = sy0; sy < sy1; sy++)
+        for (I64 sx = sx0; sx < sx1; sx++) {
+          U8 *q = img->rgba + (sy * img->w + sx) * 4;
+          r += q[0] * q[3];
+          g += q[1] * q[3];
+          b += q[2] * q[3];
+          al += q[3];
+          cnt++;
+        }
+      if (al == 0)
+        continue;
+      U32 col = 0xFF000000 | ((r / al) << 16) | ((g / al) << 8) | (b / al);
+      Blend(c, x0 + dx, y0 + dy, col, al / cnt);
+    }
+  }
 }
 
 // ---- text -----------------------------------------------------------------

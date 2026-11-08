@@ -327,6 +327,48 @@ I32 Main(I32 argc, U8 **argv)
   I64 bcount = b->log->count;
   ReportEvent(m, bshadow);
   Check(b->log->count == bcount, "an event is reported once");
+
+  // Only the manager moves the incident's phase; a member asks for it.
+  setenv("ARK_CUT_CMD", "true", 1);
+  setenv("ARK_RESTORE_CMD", "true", 1);
+  I64 phase_before = IncidentPhase(a);
+  m->view = V_OVERVIEW;
+  I64 asks_before = AlertCount(a);
+  Draw(a);
+  Draw(m);
+  Check(StrNCmp(a->title, "ARK  Manager: ", 14) == 0, "the manager's window title says Manager");
+  Check(StrNCmp(m->title, "ARK  Analyst: ", 14) == 0, "a member's window title says Analyst");
+  Check(Click(m, H_PHASE, PHASE_RECOVER), "a member can click a phase");
+  Check(b->log->entries[b->log->count - 1].kind == KIND_ALERT &&
+        RequestedPhase(b->log->entries[b->log->count - 1].body) == PHASE_RECOVER,
+        "clicking it asks the manager, as a signed alert");
+  I64 bcount2 = b->log->count;
+  Click(m, H_PHASE, PHASE_RECOVER);
+  Check(b->log->count == bcount2, "a double click asks once");
+  Deliver(b, a->st);
+  Check(IncidentPhase(a) == phase_before, "asking doesn't move the phase");
+  Check(AlertCount(a) == asks_before + 1, "the manager gets the request");
+  a->view = V_OVERVIEW;
+  Draw(a);
+  Check(Hits(a, H_PHASE) == 4, "the manager's alert card offers Move to RECOVER");
+  Check(Click(a, H_PHASE, PHASE_RECOVER) && IncidentPhase(a) == PHASE_RECOVER, "Move to RECOVER sets it");
+  Check(UnackedAlerts(a) == 0, "moving answers the request");
+  Deliver(a->st, b);
+  Check(IncidentPhase(m) == PHASE_RECOVER, "the member's station follows the manager");
+  I64 plen = Post(b, KIND_NOTE, PHASE_DETECT, "Moved the response to DETECT: forged.", 37, msg);
+  StationReceive(a->st, msg, plen);
+  Check(IncidentPhase(a) == PHASE_RECOVER, "a phase note from a member doesn't move the incident");
+
+  // The kill switch is the manager's; a member alerts instead.
+  Draw(m);
+  Check(Hits(m, H_CUT) == 0, "a member has no CUT button");
+  Check(Click(m, H_ALERT_MGR) && m->kind == KIND_ALERT && m->focus == FLD_COMPOSE,
+        "Alert the manager opens an alert to write");
+  m->kind = KIND_NOTE;
+  m->focus = -1;
+  I64 clen = Post(b, KIND_NETWORK, PHASE_RECOVER, "Cut this machine off the internet (test).", 41, msg);
+  Check(IsCut(m), "a member's laptop cut before this rule shows as cut");
+  Check(Click(m, H_RESTORE) && !IsCut(m), "and its own station can restore it");
   m->view = V_SERVER;
   Check(Hits(m, H_REPORT) == 0, "and the button is gone after");
   a->alerts_acked = AlertCount(a);

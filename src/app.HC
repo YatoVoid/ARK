@@ -77,6 +77,7 @@
 #define H_WRITE      27
 #define H_CLEAR      28   // delete this station's data and start over
 #define H_BACK       29   // back to the name step, nothing written yet
+#define H_ALERT_MGR  30   // a member's panel: start an alert to the manager
 
 #define RS_NONE     0
 #define RS_RUNNING  1
@@ -218,6 +219,11 @@ class App
   I64 feed_posted;        // events posted in it
   I64 feed_dropped;
   I64 clear_armed;        // time() of the first Clear press, 0 if not armed
+  I64 phase_asked;        // phase a member last asked the manager for
+  I64 phase_asked_at;     // and when, so a double click doesn't ask twice
+  U8 title[160];          // window title last set
+  Bool icons_loaded;
+  Image icon_laptop, icon_relay;
   I64 report_state;       // RS_ value
   I64 report_started;
   Bool report_warmed;
@@ -398,6 +404,23 @@ Entry *LastNetwork(App *a, Bool mine)
   return best;
 }
 
+// The manager's newest network entry, as every station sees it.
+Entry *ManagerNetwork(App *a)
+{
+  Log *log = a->st->log;
+  Entry *best = NULL;
+  if (!log->has_admin)
+    return NULL;
+  for (I64 i = 0; i < log->count; i++) {
+    Entry *e = &log->entries[i];
+    if (e->kind != KIND_NETWORK || e->status != ST_OK || !Same(e->author, log->admin, PK_BYTES))
+      continue;
+    if (best == NULL || e->lamport > best->lamport)
+      best = e;
+  }
+  return best;
+}
+
 // Whether this machine is cut off, as this station last logged it.
 Bool IsCut(App *a)
 {
@@ -429,15 +452,38 @@ I64 OpenedAt(Log *log)
   return time(NULL);
 }
 
-// The phase of the newest note that set one. Clicking a phase in the top
-// bar posts such a note, so every station agrees on the phase.
+Bool Letter(U8 ch)
+{
+  return (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z');
+}
+
+// "Asks to move the response to ERADICATE." -> 3, anything else -> 0.
+I64 RequestedPhase(U8 *text)
+{
+  U8 *lead = "Asks to move the response to ";
+  I64 n = StrLen(lead);
+  if (StrNCmp(text, lead, n) != 0)
+    return 0;
+  for (I64 p = 1; p <= 4; p++) {
+    I64 k = StrLen(g_phase_names[p]);
+    if (StrNCmp(text + n, g_phase_names[p], k) == 0 && !Letter(text[n + k]))
+      return p;
+  }
+  return 0;
+}
+
+// The phase of the manager's newest note. Clicking a phase in the top bar
+// posts such a note, so every station agrees on the phase. Notes from other
+// members carry a phase too, but only the manager can move the incident, and
+// that is checked here on every station, not just hidden in the UI.
 I64 IncidentPhase(App *a)
 {
   Log *log = a->st->log;
   LogSorted(log, a->order);
   for (I64 k = log->count - 1; k >= 0; k--) {
     Entry *e = &log->entries[a->order[k]];
-    if (e->kind == KIND_NOTE && e->status == ST_OK && e->phase >= 1 && e->phase <= 4)
+    if (e->kind == KIND_NOTE && e->status == ST_OK && e->phase >= 1 && e->phase <= 4 &&
+        log->has_admin && Same(e->author, log->admin, PK_BYTES))
       return e->phase;
   }
   return PHASE_DETECT;
@@ -507,16 +553,17 @@ Bool ClockStarted(Clock *clocks, I64 n, I64 rule)
   return FALSE;
 }
 
+// Severity: red is lost, yellow is not confirmed, green is safe.
 U32 StatusColor(U8 *status)
 {
   if (StrCmp(status, "EXFILTRATED") == 0)
     return C_RED;
   if (StrCmp(status, "ENCRYPTED") == 0)
-    return C_PURPLE;
+    return C_RED;
   if (StrCmp(status, "SUSPECTED") == 0)
     return C_AMBER;
   if (StrCmp(status, "CONTAINED") == 0)
-    return C_CYAN;
+    return C_GREEN;
   if (StrCmp(status, "CLEAN") == 0)
     return C_GREEN;
   return C_FAINT;
@@ -534,7 +581,69 @@ U32 LightOf(U32 color)
     return C_CYAN_FG;
   if (color == C_GREEN)
     return C_GREEN_FG;
-  return C_MUTED;
+  if (color == C_FAINT)
+    return C_MUTED;
+  return Mix(0xFFFFFFFF, color, 70);
+}
+
+U32 PhaseColor(I64 p)
+{
+  if (p == 1)
+    return C_DETECT;
+  if (p == 2)
+    return C_CONTAIN;
+  if (p == 3)
+    return C_ERADICATE;
+  if (p == 4)
+    return C_RECOVER;
+  return C_FAINT;
+}
+
+#define KEYWORDS 14
+// Index 1 to 4 are the phases in order, so the index is the phase number.
+// CONTAINED comes before CONTAIN so the longer word wins.
+U8 *g_keywords[KEYWORDS] = {"CONTAINED", "DETECT", "CONTAIN", "ERADICATE", "RECOVER", "ENCRYPTED", "EXFILTRATED",
+                            "SUSPICIOUS", "ALERT", "CUT", "SUSPECTED", "WATCH", "CLEAN", "RESTORED"};
+
+U32 KeywordColor(I64 k)
+{
+  if (k == 0)
+    return C_GREEN_FG;
+  if (k <= 4)
+    return LightOf(PhaseColor(k));
+  if (k <= 9)
+    return C_RED_FG;
+  if (k <= 11)
+    return C_AMBER_FG;
+  return C_GREEN_FG;
+}
+
+// Draws len bytes of s, with phase and status words in their colors so a
+// line can be skimmed instead of read.
+U0 RichText(Canvas *c, I64 f, I64 x, I64 y, U8 *s, I64 len, U32 fg)
+{
+  Font *font = &c->font[f];
+  I64 px = Px(x), py = Px(y);
+  I64 left = 0;
+  U32 col = fg;
+  for (I64 i = 0; i < len; i++) {
+    if (left == 0) {
+      col = fg;
+      if (i == 0 || !Letter(s[i - 1])) {
+        for (I64 k = 0; k < KEYWORDS; k++) {
+          I64 kl = StrLen(g_keywords[k]);
+          if (i + kl <= len && StrNCmp(s + i, g_keywords[k], kl) == 0 && (i + kl == len || !Letter(s[i + kl]))) {
+            left = kl;
+            col = KeywordColor(k);
+            break;
+          }
+        }
+      }
+    }
+    px = DrawGlyph(c, font, px, py, s[i], col);
+    if (left > 0)
+      left--;
+  }
 }
 
 U32 RemainingColor(I64 left)
@@ -597,35 +706,43 @@ U0 EntryText(Log *log, Entry *e, U8 *out)
       out[i] = ' ';
 }
 
-U0 KindTag(Entry *e, U8 *out)
+// The tag at the start of a log row: what kind of entry, colored by how
+// much it matters. Returns FALSE for plain messages, which get no badge.
+Bool EntryTag(Entry *e, U8 *text, U8 *out, U32 *color)
 {
-  if (e->kind == KIND_NOTE && e->phase >= 1 && e->phase <= 4)
-    snprintf(out, 24, "Note, %s", g_phase_names[e->phase]);
-  else if (e->kind == KIND_NOTE)
-    StrCpy(out, "Note");
-  else if (e->kind == KIND_CHAT)
-    StrCpy(out, "Chat");
-  else if (e->kind == KIND_SCOPE)
-    StrCpy(out, "Scope");
-  else if (e->kind == KIND_ALERT)
+  *color = C_FAINT;
+  if (e->kind == KIND_ALERT) {
     StrCpy(out, "ALERT");
-  else if (e->kind == KIND_NETWORK)
-    StrCpy(out, "Network");
-  else
-    StrCpy(out, "Team");
-}
-
-U32 KindColor(I64 kind)
-{
-  if (kind == KIND_ALERT || kind == KIND_NETWORK)
-    return C_RED_FG;
-  if (kind == KIND_CHAT)
-    return C_PURPLE_FG;
-  if (kind == KIND_SCOPE)
-    return C_AMBER_FG;
-  if (kind == KIND_NOTE)
-    return C_CYAN_FG;
-  return C_MUTED;
+    *color = C_RED;
+  } else if (e->kind == KIND_NETWORK && StrNCmp(text, "Restored", 8) == 0) {
+    StrCpy(out, "RESTORED");
+    *color = C_GREEN;
+  } else if (e->kind == KIND_NETWORK && StrNCmp(text, "Tried", 5) == 0) {
+    StrCpy(out, "FAILED");
+    *color = C_AMBER;
+  } else if (e->kind == KIND_NETWORK) {
+    StrCpy(out, "CUT");
+    *color = C_RED;
+  } else if (e->kind == KIND_SCOPE) {
+    StrCpy(out, "SCOPE");
+    for (I64 i = 0; i < 5; i++)
+      if (strstr(text, g_scope_status[i]) != NULL) {
+        *color = StatusColor(g_scope_status[i]);
+        break;
+      }
+  } else if (e->kind == KIND_NOTE && e->phase >= 1 && e->phase <= 4) {
+    StrCpy(out, g_phase_names[e->phase]);
+    *color = PhaseColor(e->phase);
+  } else if (e->kind == KIND_NOTE) {
+    StrCpy(out, "NOTE");
+  } else if (e->kind == KIND_CHAT) {
+    StrCpy(out, "chat");
+    return FALSE;
+  } else {
+    StrCpy(out, "team");
+    return FALSE;
+  }
+  return TRUE;
 }
 
 Bool PassesFilter(App *a, Entry *e, U8 *text)
@@ -882,7 +999,7 @@ U0 PageHead(App *a, U8 *title, U8 *sub)
   Canvas *c = a->cv;
   Text(a->cv, F_H1, CX0, TOP_H + 18, title, C_TEXT, (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 260);
   if (sub != NULL)
-    Text(c, F_BODY, CX0, TOP_H + 50, sub, C_MUTED, (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 260);
+    Text(c, F_BODY, CX0, TOP_H + 56, sub, C_MUTED, (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 260);
 }
 
 // ---- frame: sidebar, top bar, control panel -------------------------------
@@ -894,9 +1011,7 @@ U0 DrawSide(App *a)
   Fill(c, 0, 0, SIDE_W, g_ch, C_PANEL);
   Fill(c, SIDE_W - 1, 0, 1, g_ch, C_LINE);
   Text(c, F_H1, 20, 18, "ARK", C_TEXT);
-  Text(c, F_SMALL, 74, 26, "off-network incident log", C_FAINT);
 
-  Text(c, F_LABEL, 20, 70, "INCIDENT", C_FAINT);
   U8 title[96];
   IncidentTitle(log, title);
   I64 starts[2], lens[2];
@@ -908,7 +1023,7 @@ U0 DrawSide(App *a)
   snprintf(line, 64, "Day %ld", day);
   I64 y = 88 + lines * 18 + 16;
   I64 x = Text(c, F_SMALL, 20, y - 7, line, C_MUTED) + 10;
-  Badge(a, x, y, g_phase_names[IncidentPhase(a)], C_CYAN);
+  Badge(a, x, y, g_phase_names[IncidentPhase(a)], PhaseColor(IncidentPhase(a)));
 
   Clock clocks[RULES];
   I64 nclocks = Deadlines(log, clocks);
@@ -984,7 +1099,7 @@ U0 DrawSide(App *a)
   if (IsAdmin(a->st))
     Text(c, F_SMALL, 20, g_ch - 56, "Manager, this station", C_MUTED);
   else
-    Text(c, F_SMALL, 20, g_ch - 56, "Member, this station", C_MUTED);
+    Text(c, F_SMALL, 20, g_ch - 56, "Analyst, this station", C_MUTED);
   U8 fp[32], keyline[40];
   Fingerprint(a->st->pk, fp);
   snprintf(keyline, 40, "key %s", fp);
@@ -1019,11 +1134,11 @@ U0 DrawTop(App *a)
     U32 bg = C_BG, border = C_LINE, fg = C_FAINT;
     if (p < phase) {
       border = C_LINE2;
-      fg = C_MUTED;
+      fg = Mix(PhaseColor(p), C_BG, 170);
     }
     if (p == phase) {
-      bg = C_CYAN;
-      border = C_CYAN;
+      bg = PhaseColor(p);
+      border = bg;
       fg = C_BG;
     } else if (Hover(a, x, 14, w - 4, 36)) {
       border = Mix(0xFFFFFFFF, C_LINE2, 40);
@@ -1039,34 +1154,9 @@ U0 DrawTop(App *a)
       AddHit(a, x, 14, w - 4, 36, H_PHASE, p);
     x += w;
   }
+  if (!IsAdmin(a->st))
+    TextMid(a->cv, F_SMALL, x + 12, 32, "Set by the manager. Click a phase to ask for it.", C_FAINT);
 
-  I64 online = OnlineCount(a);
-  U8 relay[48];
-  U32 rc = C_GREEN;
-  if (a->link.fd < 0) {
-    StrCpy(relay, "No relay");
-    rc = C_RED;
-  } else if (online == 0) {
-    StrCpy(relay, "Relay: alone");
-    rc = C_AMBER;
-  } else {
-    snprintf(relay, 48, "Relay: %ld online", online);
-  }
-  I64 problems = ProblemCount(a);
-  U8 integ[48];
-  U32 ic = C_GREEN;
-  if (problems > 0) {
-    snprintf(integ, 48, "Log: %ld bad", problems);
-    ic = C_RED;
-  } else {
-    StrCpy(integ, "Log intact");
-  }
-  Chip(a, g_cw - 16 - 136, 136, integ, ic, V_LOG);
-  Chip(a, g_cw - 16 - 136 * 2 - 8, 136, relay, rc, V_NETWORK);
-  if (IsCut(a))
-    Chip(a, g_cw - 16 - 136 * 3 - 16, 136, "Internet: CUT", C_RED, V_NETWORK);
-  else
-    Chip(a, g_cw - 16 - 136 * 3 - 16, 136, "Internet: on", C_GREEN, V_NETWORK);
 }
 
 // One status light in the control panel.
@@ -1085,10 +1175,11 @@ U0 PanelButton(App *a, I64 y, U8 *label, U8 *sub, U32 face, U32 lip, Bool on, I6
   I64 x = (g_cw - PANEL_W) + 16, w = PANEL_W - 32;
   U32 fg = C_TEXT, sfg = Mix(C_TEXT, face, 190);
   if (!on) {
-    face = Mix(face, C_PANEL, 70);
-    lip = Mix(lip, C_PANEL, 70);
-    fg = Mix(C_TEXT, C_PANEL, 120);
-    sfg = fg;
+    // unavailable: an outline, not a dimmed slab that looks broken
+    Box(c, x, y, w, 60, 10, C_PANEL, C_LINE2);
+    TextMid(c, F_BTN, x + (w - TextWidth(c, F_BTN, label)) / 2, y + 22, label, C_FAINT);
+    TextMid(c, F_SMALL, x + (w - TextWidth(c, F_SMALL, sub)) / 2, y + 42, sub, C_FAINT);
+    return;
   } else if (Hover(a, x, y, w, 66)) {
     face = Mix(0xFFFFFFFF, face, 24);
   }
@@ -1106,14 +1197,11 @@ U0 DrawPanel(App *a)
   Fill(c, (g_cw - PANEL_W), TOP_H, PANEL_W, g_ch - TOP_H, C_PANEL);
   Fill(c, (g_cw - PANEL_W), TOP_H, 1, g_ch - TOP_H, C_LINE);
   I64 x = (g_cw - PANEL_W) + 16, w = PANEL_W - 32;
-  Text(c, F_LABEL, x, TOP_H + 20, "CONTROL PANEL", C_FAINT);
   if (a->panel_fd >= 0)
-    TextRight(c, F_SMALL, x + w, TOP_H + 19, "hardware connected", C_GREEN_FG);
-  else
-    TextRight(c, F_SMALL, x + w, TOP_H + 19, "no hardware", C_FAINT);
+    Text(c, F_SMALL, x, TOP_H + 19, "Arduino panel connected", C_GREEN_FG);
 
   // What needs the manager now, most urgent first.
-  I64 y = TOP_H + 44;
+  I64 y = TOP_H + 16 + 28 * (a->panel_fd >= 0);
   I64 now = time(NULL);
   Bool cut = IsCut(a), admin = IsAdmin(a->st);
   Bool armed = a->cut_armed != 0 && now - a->cut_armed <= 3;
@@ -1146,7 +1234,7 @@ U0 DrawPanel(App *a)
     if (admin)
       StrCpy(sub, "Restore once systems are backed up and the attacker is removed.");
     else
-      StrCpy(sub, "Only the manager can restore it.");
+      StrCpy(sub, "Restore it below when the team is ready.");
     border = Mix(C_RED, C_PANEL, 140);
   } else if (a->team.join_pending && admin) {
     I64 code = JoinCode(a->team.join_pk);
@@ -1160,7 +1248,11 @@ U0 DrawPanel(App *a)
     StrCpy(sub, "The buzzer sounds when a team member sends you an alert.");
   }
   I64 box_h = 92;
-  if (ack)
+  Bool ask = ack && admin && RequestedPhase(AlertText(alert->body)) > 0 &&
+             RequestedPhase(AlertText(alert->body)) != IncidentPhase(a);
+  if (ask)
+    box_h = 172;
+  else if (ack)
     box_h = 134;
   Box(c, x, y, w, box_h, 8, tint, border);
   Text(c, F_SEMI, x + 14, y + 12, title, tc, w - 28);
@@ -1170,24 +1262,61 @@ U0 DrawPanel(App *a)
   for (I64 i = 0; i < n; i++)
     Text(c, F_SMALL, x + 14, y + 34 + i * 16, sub + starts[i], C_MUTED, w - 28, lens[i]);
   if (ack) {
-    Button(a, x + 14, y + box_h - 40, w - 28, 30, "Acknowledge", BTN_GHOST, H_ACK);
+    if (ask) {
+      I64 want = RequestedPhase(AlertText(alert->body));
+      U8 move[32];
+      snprintf(move, 32, "Move to %s", g_phase_names[want]);
+      Button(a, x + 14, y + box_h - 78, w - 28, 30, move, BTN_PRIMARY, H_PHASE, want);
+      Button(a, x + 14, y + box_h - 40, w - 28, 30, "Acknowledge", BTN_GHOST, H_ACK);
+    } else {
+      Button(a, x + 14, y + box_h - 40, w - 28, 30, "Acknowledge", BTN_GHOST, H_ACK);
+    }
   }
 
   y += box_h + 16;
-  if (cut)
-    PanelButton(a, y, "NETWORK CUT", "this machine is offline", C_RED_BTN, C_RED_DK, FALSE, H_CUT);
-  else
-    PanelButton(a, y, "CUT NETWORK", "press twice: take this machine offline", C_RED_BTN, C_RED_DK, TRUE, H_CUT);
-  y += 82;
-  if (cut && admin)
-    PanelButton(a, y, "RESTORE NETWORK", "after backups and cleanup", C_GREEN_BTN, C_GREEN_DK, TRUE, H_RESTORE);
-  else if (cut)
-    PanelButton(a, y, "RESTORE NETWORK", "manager only", C_GREEN_BTN, C_GREEN_DK, FALSE, H_RESTORE);
-  else
-    PanelButton(a, y, "RESTORE NETWORK", "internet is on", C_GREEN_BTN, C_GREEN_DK, FALSE, H_RESTORE);
+  I64 y0 = y;
+  if (admin) {
+    if (cut)
+      PanelButton(a, y, "NETWORK CUT", "this machine is offline", C_RED_BTN, C_RED_DK, FALSE, H_CUT);
+    else
+      PanelButton(a, y, "CUT NETWORK", "press twice: take this machine offline", C_RED_BTN, C_RED_DK, TRUE, H_CUT);
+    y += 82;
+    if (cut)
+      PanelButton(a, y, "RESTORE NETWORK", "after backups and cleanup", C_GREEN_BTN, C_GREEN_DK, TRUE, H_RESTORE);
+    else
+      PanelButton(a, y, "RESTORE NETWORK", "internet is on", C_GREEN_BTN, C_GREEN_DK, FALSE, H_RESTORE);
+  } else {
+    if (cut)
+      PanelButton(a, y, "RESTORE NETWORK", "bring this machine back online", C_GREEN_BTN, C_GREEN_DK, TRUE, H_RESTORE);
+    else
+      PanelButton(a, y, "ALERT THE MANAGER", "their panel buzzes", C_RED_BTN, C_RED_DK, TRUE,
+                  H_ALERT_MGR);
+    y += 82;
+    // Where the kill switch is, and what state it's in.
+    U8 boss[NAME_MAX], line[96];
+    StrCpy(boss, "the manager");
+    if (a->st->log->has_admin)
+      NameOf(a->st->log, a->st->log->admin, boss);
+    Entry *mn = ManagerNetwork(a);
+    Bool mcut = mn != NULL && StrNCmp(mn->body, "Cut", 3) == 0;
+    Box(c, x, y, w, 60, 10, C_PANEL, C_LINE2);
+    snprintf(line, 96, "Kill switch: %s's laptop", boss);
+    Text(c, F_SMALL, x + 14, y + 12, line, C_MUTED, w - 28);
+    if (mcut) {
+      U8 when[8];
+      ClockText(mn->time, when);
+      snprintf(line, 96, "Offline since %s", when);
+      Dot(c, x + 20, y + 41, 8, C_RED);
+      Text(c, F_SEMI, x + 32, y + 33, line, C_RED_FG, w - 46);
+    } else {
+      Dot(c, x + 20, y + 41, 8, C_GREEN);
+      Text(c, F_SEMI, x + 32, y + 33, "Online", C_GREEN_FG, w - 46);
+    }
+  }
+  y = y0 + 82;
 
   y += 96;
-  Text(c, F_LABEL, x, y, "STATUS", C_FAINT);
+  Text(c, F_SEMI, x, y, "Status", C_MUTED);
   y += 30;
   if (cut)
     Light(a, y, "Internet", "CUT", C_RED);
@@ -1308,15 +1437,23 @@ I64 LogRow(App *a, Entry *e, U8 *text, I64 x, I64 y, I64 w, Bool draw, I64 max_l
   U8 clock[8], name[NAME_MAX], tag[24];
   ClockText(e->time, clock);
   NameOf(a->st->log, e->author, name);
-  KindTag(e, tag);
+  U32 tc;
+  Bool badge = EntryTag(e, text, tag, &tc);
   Text(c, F_MONO, x + 16, y + 10, clock, C_FAINT);
   Text(c, F_SEMI, x + 66, y + 9, name, C_TEXT, 84);
-  Text(c, F_SMALL, x + 156, y + 10, tag, KindColor(e->kind), 100);
+  if (badge)
+    Badge(a, x + 156, y + 18, tag, tc);
+  else
+    Text(c, F_SMALL, x + 158, y + 10, tag, C_FAINT, 100);
   U32 fg = C_TEXT;
   if (e->status != ST_OK)
     fg = C_FAINT;
-  for (I64 i = 0; i < lines; i++)
-    Text(c, F_BODY, tx, y + 9 + i * 18, text + starts[i], fg, tw, lens[i]);
+  for (I64 i = 0; i < lines; i++) {
+    if (e->status == ST_OK)
+      RichText(c, F_BODY, tx, y + 9 + i * 18, text + starts[i], lens[i], fg);
+    else
+      Text(c, F_BODY, tx, y + 9 + i * 18, text + starts[i], fg, tw, lens[i]);
+  }
   if (e->status != ST_OK)
     Badge(a, x + w - 16 - 120, y + 18, StatusName(e->status), C_RED);
   return h;
@@ -1396,7 +1533,7 @@ U0 DrawOverview(App *a)
     U8 rem[24], due[32], who[64];
     RemainingText(left, rem);
     DayDateText(clocks[0].due, due);
-    Text(c, F_LABEL, CX0 + 20, y + 18, "NEXT LEGAL DEADLINE", C_FAINT);
+    Text(c, F_SMALL, CX0 + 20, y + 18, "Next legal deadline", C_MUTED);
     Text(c, F_BIG, CX0 + 18, y + 40, rem, RemainingColor(left));
     I64 mx = CX0 + 360;
     Fill(c, mx, y + 20, 1, 68, C_LINE);
@@ -1411,7 +1548,7 @@ U0 DrawOverview(App *a)
     Text(c, F_BODY, mx + 24, y + 72, dueline, C_MUTED);
     U8 more[32];
     if (n > 1)
-      snprintf(more, 32, "All %ld clocks", n);
+      snprintf(more, 32, "See all %ld", n);
     else
       StrCpy(more, "Clock details");
     Button(a, CX0 + (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 150, y + 36, 130, 36, more, BTN_GHOST, H_NAV, V_CLOCKS);
@@ -1500,9 +1637,18 @@ U0 DrawOverview(App *a)
     ry += 40;
     items++;
   }
+  Entry *mnet = ManagerNetwork(a);
   if (IsCut(a)) {
     Dot(c, rx + 20, ry + 20, 8, C_RED);
     Text(c, F_BODY, rx + 32, ry + 11, "Internet cut on this machine. ARK runs on the relay.", C_TEXT, rw - 48);
+    ry += 40;
+    items++;
+  } else if (!IsAdmin(a->st) && mnet != NULL && StrNCmp(mnet->body, "Cut", 3) == 0) {
+    U8 boss[NAME_MAX], line[128];
+    NameOf(a->st->log, mnet->author, boss);
+    snprintf(line, 128, "%s's laptop is off the internet.", boss);
+    Dot(c, rx + 20, ry + 20, 8, C_RED);
+    Text(c, F_BODY, rx + 32, ry + 11, line, C_TEXT, rw - 48);
     ry += 40;
     items++;
   }
@@ -2109,17 +2255,31 @@ U0 DrawNetworkPage(App *a)
   I64 online = OnlineCount(a);
   Entry *net = LastNetwork(a, FALSE);
   if (net != NULL) {
-    U8 name[NAME_MAX], when[32], head[128];
-    NameOf(a->st->log, net->author, name);
+    U8 who[NAME_MAX + 16], when[32], head[160], sub[200];
+    if (Same(net->author, a->st->pk, PK_BYTES)) {
+      StrCpy(who, "This machine");
+    } else {
+      U8 name[NAME_MAX];
+      NameOf(a->st->log, net->author, name);
+      snprintf(who, NAME_MAX + 16, "%s's laptop", name);
+    }
     DateText(net->time, when);
-    Bool cut = StrNCmp(net->body, "Cut", 3) == 0;
     U32 col = C_GREEN;
-    if (cut)
+    if (StrNCmp(net->body, "Cut", 3) == 0) {
       col = C_RED;
-    snprintf(head, 128, "%s: %s", when, name);
+      snprintf(head, 160, "%s is off the internet", who);
+      snprintf(sub, 200, "Since %s. Any link an attacker had through it is gone; ARK keeps running over the relay.", when);
+    } else if (StrNCmp(net->body, "Tried", 5) == 0) {
+      col = C_AMBER;
+      snprintf(head, 160, "%s may still be online", who);
+      snprintf(sub, 200, "%s: %s", when, net->body);
+    } else {
+      snprintf(head, 160, "%s is back online", who);
+      snprintf(sub, 200, "Since %s.", when);
+    }
     Box(c, CX0, y, (g_cw - SIDE_W - PANEL_W - 2 * PAD), 60, 8, Mix(col, C_BG, 30), col);
     Text(c, F_SEMI, CX0 + 16, y + 12, head, LightOf(col));
-    Text(c, F_SMALL, CX0 + 16, y + 34, net->body, LightOf(col), (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 32);
+    Text(c, F_SMALL, CX0 + 16, y + 34, sub, LightOf(col), (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 32);
     y += 76;
   }
   if (a->link.fd < 0 || online == 0) {
@@ -2135,43 +2295,52 @@ U0 DrawNetworkPage(App *a)
     y += 76;
   }
 
-  Card(a, CX0, y, (g_cw - SIDE_W - PANEL_W - 2 * PAD), 172);
-  I64 bw = 220, by = y + 28, bh = 116;
+  if (!a->icons_loaded) {
+    LoadImage(c, "laptop", &a->icon_laptop);
+    LoadImage(c, "relay", &a->icon_relay);
+    a->icons_loaded = TRUE;
+  }
+  I64 cw = g_cw - SIDE_W - PANEL_W - 2 * PAD;
+  Card(a, CX0, y, cw, 232);
+  I64 isz = 88, iy = y + 22, ty = iy + isz + 12;
+  I64 lx = CX0 + cw / 6, mx = CX0 + cw / 2, ox = CX0 + cw * 5 / 6, colw = cw / 3 - 24;
+  DrawImage(c, &a->icon_laptop, lx - isz / 2, iy, isz);
+  DrawImage(c, &a->icon_relay, mx - isz / 2, iy, isz);
+  DrawImage(c, &a->icon_laptop, ox - isz / 2, iy, isz);
   // This station.
-  Box(c, CX0 + 24, by, bw, bh, 10, C_BG, C_LINE2);
-  Text(c, F_H2, CX0 + 40, by + 16, "This station", C_TEXT);
-  Text(c, F_SMALL, CX0 + 40, by + 40, a->st->name, C_MUTED, bw - 32);
-  Text(c, F_MONO, CX0 + 40, by + 60, a->port, C_FAINT, bw - 32);
-  U8 count[32];
-  snprintf(count, 32, "%ld ENTRIES", a->st->log->count);
-  Badge(a, CX0 + 40, by + 92, count, C_GREEN);
+  Text(c, F_H2, lx - TextWidth(c, F_H2, "This station") / 2, ty, "This station", C_TEXT);
+  Text(c, F_SMALL, lx - MinI64(TextWidth(c, F_SMALL, a->st->name), colw) / 2, ty + 26, a->st->name, C_MUTED, colw);
+  U8 count[48];
+  snprintf(count, 48, "%s, %ld entries", a->port, a->st->log->count);
+  Text(c, F_SMALL, lx - MinI64(TextWidth(c, F_SMALL, count), colw) / 2, ty + 46, count, C_FAINT, colw);
   // Relay.
-  I64 rx = CX0 + ((g_cw - SIDE_W - PANEL_W - 2 * PAD) - 240) / 2;
-  Box(c, rx, by, 240, bh, 10, C_BG, C_PURPLE);
-  Text(c, F_H2, rx + (240 - TextWidth(c, F_H2, "Untrusted relay")) / 2, by + 16, "Untrusted relay", C_TEXT);
-  Text(c, F_SMALL, rx + (240 - TextWidth(c, F_SMALL, "Arduino UNO Q, own Wi-Fi")) / 2, by + 40, "Arduino UNO Q, own Wi-Fi", C_MUTED);
-  I64 bx = rx + (240 - TextWidth(c, F_LABEL, "SEES ONLY CIPHERTEXT") - 14) / 2;
-  Badge(a, bx, by + 78, "SEES ONLY CIPHERTEXT", C_PURPLE);
+  Text(c, F_H2, mx - TextWidth(c, F_H2, "Untrusted relay") / 2, ty, "Untrusted relay", C_TEXT);
+  Text(c, F_SMALL, mx - TextWidth(c, F_SMALL, "Arduino UNO Q, own Wi-Fi") / 2, ty + 26, "Arduino UNO Q, own Wi-Fi", C_MUTED);
+  Badge(a, mx - (TextWidth(c, F_LABEL, "SEES ONLY CIPHERTEXT") + 14) / 2, ty + 56, "SEES ONLY CIPHERTEXT", C_PURPLE);
   // Other stations.
-  I64 ox = CX0 + (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 24 - bw;
-  Box(c, ox, by, bw, bh, 10, C_BG, C_LINE2);
-  Text(c, F_H2, ox + 16, by + 16, "Other stations", C_TEXT);
-  I64 py = by + 46, shown = 0;
+  Text(c, F_H2, ox - TextWidth(c, F_H2, "Other stations") / 2, ty, "Other stations", C_TEXT);
+  I64 py = ty + 34, shown = 0;
   I64 now = time(NULL);
-  for (I64 i = 0; i < a->team.peer_count && shown < 3; i++) {
+  for (I64 i = 0; i < a->team.peer_count && shown < 2; i++) {
     Peer *p = &a->team.peers[i];
-    Bool on = now - p->heard <= ONLINE_SECS;
     U32 dot = C_FAINT;
-    if (on)
+    if (now - p->heard <= ONLINE_SECS)
       dot = C_GREEN;
-    Dot(c, ox + 22, py, 8, dot);
-    TextMid(c, F_BODY, ox + 34, py, p->name, C_TEXT, bw - 50);
-    py += 22;
+    I64 nw = MinI64(TextWidth(c, F_SMALL, p->name), colw - 14);
+    I64 nx = ox - (nw + 14) / 2;
+    Dot(c, nx + 4, py, 8, dot);
+    TextMid(c, F_SMALL, nx + 14, py, p->name, C_TEXT, colw - 14);
+    py += 20;
     shown++;
   }
+  if (a->team.peer_count > 2) {
+    U8 more[32];
+    snprintf(more, 32, "and %ld more", a->team.peer_count - 2);
+    TextMid(c, F_SMALL, ox - TextWidth(c, F_SMALL, more) / 2, py, more, C_FAINT);
+  }
   if (shown == 0)
-    TextMid(c, F_SMALL, ox + 16, py, "none heard yet", C_FAINT);
-  // Links between them.
+    TextMid(c, F_SMALL, ox - TextWidth(c, F_SMALL, "none heard yet") / 2, py, "none heard yet", C_FAINT);
+  // Links between them, level with the middle of the icons.
   U32 l1 = C_GREEN, l2 = C_GREEN;
   U8 *t1 = "sealed link", *t2 = "sealed link";
   if (a->link.fd < 0) {
@@ -2182,14 +2351,15 @@ U0 DrawNetworkPage(App *a)
     l2 = C_AMBER;
     t2 = "waiting";
   }
-  I64 ax = CX0 + 24 + bw, aw = rx - ax;
-  Fill(c, ax + 8, by + bh / 2, aw - 16, 3, l1);
-  TextMid(c, F_SMALL, ax + (aw - TextWidth(c, F_SMALL, t1)) / 2, by + bh / 2 - 14, t1, LightOf(l1));
-  I64 cx = rx + 240, cw = ox - cx;
-  Fill(c, cx + 8, by + bh / 2, cw - 16, 3, l2);
-  TextMid(c, F_SMALL, cx + (cw - TextWidth(c, F_SMALL, t2)) / 2, by + bh / 2 - 14, t2, LightOf(l2));
+  I64 ly = iy + isz / 2 + 6;
+  I64 ax = lx + isz / 2 + 14, aw = mx - isz / 2 - 14 - ax;
+  Fill(c, ax, ly, aw, 3, l1);
+  TextMid(c, F_SMALL, ax + (aw - TextWidth(c, F_SMALL, t1)) / 2, ly - 14, t1, LightOf(l1));
+  I64 bx2 = mx + isz / 2 + 14, bw2 = ox - isz / 2 - 14 - bx2;
+  Fill(c, bx2, ly, bw2, 3, l2);
+  TextMid(c, F_SMALL, bx2 + (bw2 - TextWidth(c, F_SMALL, t2)) / 2, ly - 14, t2, LightOf(l2));
 
-  y += 188;
+  y += 248;
   I64 hw = ((g_cw - SIDE_W - PANEL_W - 2 * PAD) - 16) / 2;
   Card(a, CX0, y, hw, 132);
   I64 ry = CardHead(a, CX0, y, hw, "What the relay can see");
@@ -2233,11 +2403,19 @@ U0 GuideBlock(App *a, I64 x, I64 *y, I64 w, U8 *head, U8 **lines)
   Text(c, F_SEMI, x, *y, head, C_TEXT);
   *y += 24;
   for (I64 i = 0; lines[i] != NULL; i++) {
-    Text(c, F_BODY, x, *y, lines[i], C_MUTED, w);
+    RichText(c, F_BODY, x, *y, lines[i], StrLen(lines[i]), C_MUTED);
     *y += 20;
   }
   *y += 18;
 }
+
+U8 *g_guide_colors[] = {
+  "Red, act now: ALERT, CUT, ENCRYPTED, EXFILTRATED",
+  "Yellow, check it: SUSPECTED, WATCH, deadlines",
+  "Green, safe: CLEAN, CONTAINED, RESTORED",
+  "Phases: DETECT, CONTAIN, ERADICATE, RECOVER",
+  "Grey: chat and team news, nothing to act on.", NULL
+};
 
 U8 *g_guide_what[] = {
   "A logbook for a cyber incident that never touches the",
@@ -2299,6 +2477,7 @@ U0 DrawGuidePage(App *a)
   GuideBlock(a, CX0 + 20, &ly, hw - 40, "Server log", g_guide_server);
   GuideBlock(a, CX0 + 20, &ly, hw - 40, "Writing", g_guide_write);
   GuideBlock(a, CX0 + 20, &ly, hw - 40, "Phases", g_guide_phases);
+  GuideBlock(a, CX0 + hw + 36, &ry, hw - 40, "Colors", g_guide_colors);
   GuideBlock(a, CX0 + hw + 36, &ry, hw - 40, "Warning badges", g_guide_badges);
   GuideBlock(a, CX0 + hw + 36, &ry, hw - 40, "Keys", g_guide_keys);
   GuideBlock(a, CX0 + hw + 36, &ry, hw - 40, "Hardware panel", g_guide_panel);
@@ -2859,8 +3038,30 @@ U0 DrawReportPage(App *a)
   a->report_max_scroll = MaxI64(0, ty + a->report_scroll - (y + 24) - h + 48);
 }
 
+// The role goes in the window title so two stations on one desktop can be
+// told apart in the taskbar.
+U0 WindowTitle(App *a)
+{
+  U8 title[160];
+  if (Ready(a) && IsAdmin(a->st))
+    snprintf(title, 160, "ARK  Manager: %s", a->st->name);
+  else if (Ready(a))
+    snprintf(title, 160, "ARK  Analyst: %s", a->st->name);
+  else if (a->mode == MODE_UNLOCK)
+    snprintf(title, 160, "ARK  Locked: %s", a->st->dir);
+  else if (a->mode == MODE_READY)
+    snprintf(title, 160, "ARK  Waiting to join: %s", a->st->name);
+  else
+    snprintf(title, 160, "ARK  New station: %s", a->st->dir);
+  if (StrCmp(title, a->title) != 0 && a->cv->window != NULL) {
+    StrCpy(a->title, title);
+    SDL_SetWindowTitle(a->cv->window, title);
+  }
+}
+
 U0 Draw(App *a)
 {
+  WindowTitle(a);
   Canvas *c = a->cv;
   ClipAll(c);
   a->hit_count = 0;
@@ -2976,6 +3177,12 @@ U0 CutNetwork(App *a, U8 *how)
 {
   if (IsCut(a))
     return;
+  if (!IsAdmin(a->st)) {
+    // A member's relay link is usually Wi-Fi, so cutting their own laptop
+    // would cut them off the team too. The kill switch is the manager's.
+    Say(a, "The kill switch is on the manager's station. Send them an alert.", C_AMBER_FG);
+    return;
+  }
   I64 rc = RunSwitch("ARK_CUT_CMD", "nmcli networking off");
   U8 body[200];
   if (rc == 0) {
@@ -2993,10 +3200,8 @@ U0 RestoreNetwork(App *a, U8 *how)
 {
   if (!IsCut(a))
     return;
-  if (!IsAdmin(a->st)) {
-    Say(a, "Only the manager can restore the network.", C_AMBER_FG);
-    return;
-  }
+  // Restoring runs on this machine, so only this station can do it. Leaving
+  // it to the manager would strand a member whose laptop was cut.
   I64 rc = RunSwitch("ARK_RESTORE_CMD", "nmcli networking on");
   U8 body[200];
   if (rc == 0) {
@@ -3012,6 +3217,10 @@ U0 RestoreNetwork(App *a, U8 *how)
 // On screen the cut needs two presses; the hardware button is one.
 U0 CutPressed(App *a)
 {
+  if (!IsAdmin(a->st)) {
+    CutNetwork(a, "on screen");
+    return;
+  }
   if (a->cut_armed != 0 && time(NULL) - a->cut_armed <= 3)
     CutNetwork(a, "on screen");
   else
@@ -3130,6 +3339,23 @@ U0 PollFeed(App *a)
 
 U0 SetPhase(App *a, I64 p)
 {
+  if (!IsAdmin(a->st)) {
+    U8 ask[96];
+    I64 now = time(NULL);
+    if (a->phase_asked == p && now - a->phase_asked_at < 60) {
+      snprintf(ask, 96, "Already asked the manager for %s.", g_phase_names[p]);
+      Say(a, ask, C_MUTED);
+      return;
+    }
+    snprintf(ask, 96, "Asks to move the response to %s.", g_phase_names[p]);
+    if (PostAndSend(a, KIND_ALERT, IncidentPhase(a), ask, StrLen(ask))) {
+      a->phase_asked = p;
+      a->phase_asked_at = now;
+      snprintf(ask, 96, "Asked the manager to move to %s. Their panel buzzes.", g_phase_names[p]);
+      Say(a, ask, C_TEXT);
+    }
+    return;
+  }
   U8 body[96];
   snprintf(body, 96, "Moved the response to %s: %s.", g_phase_names[p], g_phase_help[p]);
   if (PostAndSend(a, KIND_NOTE, p, body, StrLen(body))) {
@@ -3300,6 +3526,11 @@ U0 Act(App *a, I64 id, I64 arg)
     a->focus = arg;
   } else if (id == H_PHASE) {
     SetPhase(a, arg);
+    if (IsAdmin(a->st) && a->alerts_acked < AlertCount(a)) {
+      Entry *al = NewestAlert(a);
+      if (al != NULL && RequestedPhase(AlertText(al->body)) == arg)
+        a->alerts_acked = AlertCount(a);
+    }
   } else if (id == H_SEND) {
     SendCompose(a);
   } else if (id == H_KIND) {
@@ -3335,6 +3566,11 @@ U0 Act(App *a, I64 id, I64 arg)
     RestoreNetwork(a, "on screen");
   } else if (id == H_ACK) {
     a->alerts_acked = AlertCount(a);
+  } else if (id == H_ALERT_MGR) {
+    a->kind = KIND_ALERT;
+    if (a->view != V_OVERVIEW && a->view != V_LOG)
+      a->view = V_OVERVIEW;
+    a->focus = FLD_COMPOSE;
   } else if (id == H_LOCK) {
     Lock(a);
   } else if (id == H_START) {
