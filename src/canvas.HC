@@ -1,24 +1,36 @@
-// Drawing for the station window: a 1440x900 pixel buffer, filled
-// rectangles with anti-aliased round corners, and text from glyphs that
-// SDL2_ttf renders once at startup. The whole frame is redrawn only when
-// something changed (an event, a message, the clock ticking a minute), then
-// copied to the window scaled to fit.
+// Drawing for the station window: filled rectangles with anti-aliased round
+// corners, and text from glyphs that SDL2_ttf renders once per window size.
+//
+// Layout code works in design units, where the window is at least 1180x900.
+// The pixel buffer is the window's real size in physical pixels, and every
+// primitive converts units to pixels by the scale g_s (thousandths). So text
+// is rendered at the size it is shown, never stretched, and a wider window
+// gives the layout more width instead of black bars. The frame is redrawn
+// from scratch when something changes, then copied to the window 1:1.
 //
 // Fonts are Inter and JetBrains Mono, both SIL Open Font License, bundled in
 // assets/fonts with their licenses.
 
 #link <SDL2_ttf>
 
-#define CW  1440
-#define CH  900
+// Window size in design units, and the scale from units to pixels.
+// One global per line, and no #define that names them: hcc 0.0.15
+// crashes on "I64 a = 1, b = 2;" at file scope and on macros whose body
+// holds an identifier that isn't itself a macro.
+I64 g_cw = 1440;
+I64 g_ch = 900;
+I64 g_s = 1000;
+I64 g_pw = 1440;   // physical pixels
+I64 g_ph = 900;
+#define MIN_W 1360
+#define MIN_H 900
 
 #define SDL_PIXELFORMAT_ARGB8888    0x16362004
 #define SDL_TEXTUREACCESS_STREAMING 1
-#define SDL_HINT_RENDER_SCALE_QUALITY "SDL_RENDER_SCALE_QUALITY"
+#define SDL_WINDOW_ALLOW_HIGHDPI    0x00002000
 extern "c" U0 *SDL_CreateTexture(U0 *renderer, U32 format, I32 access, I32 w, I32 h);
 extern "c" I32 SDL_UpdateTexture(U0 *texture, SdlRect *rect, U0 *pixels, I32 pitch);
 extern "c" I32 SDL_GetRendererOutputSize(U0 *renderer, I32 *w, I32 *h);
-extern "c" I32 SDL_SetHint(U8 *name, U8 *value);
 extern "c" U0 SDL_SetWindowMinimumSize(U0 *window, I32 w, I32 h);
 
 extern "c" I32 TTF_Init();
@@ -42,14 +54,14 @@ extern "c" U0 *TTF_RenderGlyph32_Blended(U0 *font, U32 ch, U32 color);
 
 class Glyph
 {
-  I64 w, h, adv;
+  I64 w, h, adv;          // pixels
   U8 *alpha;
 };
 
 class Font
 {
   Glyph g[GLYPHS];
-  I64 height;
+  I64 height;             // pixels
   I64 ascent;
 };
 
@@ -65,14 +77,21 @@ class Font
 #define F_SEMI   9   // Inter SemiBold 13
 #define FONTS    10
 
+U8 *g_font_file[FONTS] = {
+  "Inter-Regular.ttf", "Inter-Regular.ttf", "Inter-Medium.ttf", "Inter-SemiBold.ttf",
+  "Inter-SemiBold.ttf", "Inter-SemiBold.ttf", "Inter-Bold.ttf", "JetBrainsMono-Regular.ttf",
+  "Inter-Bold.ttf", "Inter-SemiBold.ttf"
+};
+I64 g_font_size[FONTS] = {12, 13, 14, 11, 15, 22, 40, 12, 14, 13};
+
 class Canvas
 {
   U0 *window;
   U0 *renderer;
   U0 *texture;
-  SdlRect shown;          // where the last frame landed, in renderer pixels
+  U8 font_dir[512];
   Font font[FONTS];
-  I64 clip_x0, clip_y0, clip_x1, clip_y1;
+  I64 clip_x0, clip_y0, clip_x1, clip_y1;   // pixels
   U32 *pixels;
 };
 
@@ -112,18 +131,40 @@ U32 Mix(U32 c, U32 under, I64 a)
   return 0xFF000000 | ((r / 255) << 16) | ((g / 255) << 8) | (b / 255);
 }
 
-// ---- setup ----------------------------------------------------------------
-
-Bool LoadFont(Canvas *c, I64 slot, U8 *dir, U8 *file, I64 size)
+// Units to pixels and back.
+I64 Px(I64 v)
 {
-  U8 path[512];
-  snprintf(path, 512, "%s/%s", dir, file);
-  U0 *f = TTF_OpenFont(path, size);
+  return v * g_s / 1000;
+}
+
+I64 Un(I64 px)
+{
+  return px * 1000 / g_s;
+}
+
+// ---- fonts ----------------------------------------------------------------
+
+U0 FreeFonts(Canvas *c)
+{
+  for (I64 f = 0; f < FONTS; f++)
+    for (I64 i = 0; i < GLYPHS; i++) {
+      if (c->font[f].g[i].alpha != NULL)
+        Free(c->font[f].g[i].alpha);
+      c->font[f].g[i].alpha = NULL;
+    }
+}
+
+Bool LoadFont(Canvas *c, I64 slot)
+{
+  U8 path[600];
+  snprintf(path, 600, "%s/%s", c->font_dir, g_font_file[slot]);
+  U0 *f = TTF_OpenFont(path, MaxI64(6, Px(g_font_size[slot])));
   if (f == NULL)
     return FALSE;
   Font *font = &c->font[slot];
-  font->height = TTF_FontHeight(f);
-  font->ascent = TTF_FontAscent(f);
+  I64 height = TTF_FontHeight(f), ascent = TTF_FontAscent(f);
+  font->height = height;
+  font->ascent = ascent;
   for (I64 i = 0; i < GLYPHS; i++) {
     Glyph *g = &font->g[i];
     I32 minx, maxx, miny, maxy, adv;
@@ -136,69 +177,94 @@ Bool LoadFont(Canvas *c, I64 slot, U8 *dir, U8 *file, I64 size)
     g->h = *((surf + SURF_H)(I32 *));
     I64 pitch = *((surf + SURF_PITCH)(I32 *));
     U8 *px = *((surf + SURF_PIXELS)(U8 **));
-    g->alpha = MAlloc(MaxI64(1, g->w * g->h));
+    U8 *alpha = MAlloc(MaxI64(1, g->w * g->h));
     for (I64 y = 0; y < g->h; y++) {
       U32 *row = (px + y * pitch)(U32 *);
       for (I64 x = 0; x < g->w; x++)
-        g->alpha[y * g->w + x] = row[x] >> 24;
+        alpha[y * g->w + x] = row[x] >> 24;
     }
+    g->alpha = alpha;
     SDL_FreeSurface(surf);
   }
   TTF_CloseFont(f);
   return TRUE;
 }
 
+Bool LoadFonts(Canvas *c)
+{
+  FreeFonts(c);
+  for (I64 f = 0; f < FONTS; f++)
+    if (!LoadFont(c, f))
+      return FALSE;
+  return TRUE;
+}
+
+// ---- size -----------------------------------------------------------------
+
 U0 ClipAll(Canvas *c)
 {
   c->clip_x0 = 0;
   c->clip_y0 = 0;
-  c->clip_x1 = CW;
-  c->clip_y1 = CH;
+  c->clip_x1 = g_pw;
+  c->clip_y1 = g_ph;
 }
 
+// Clip to a box given in units.
 U0 Clip(Canvas *c, I64 x, I64 y, I64 w, I64 h)
 {
   // Computed into locals first: hcc 0.0.15 stores the first
   // "c->field = Call()" through the register c arrived in, which the call
   // has already reused. See docs/BUILDING.md.
-  I64 x0 = MaxI64(x, 0), y0 = MaxI64(y, 0);
-  I64 x1 = MinI64(x + w, CW), y1 = MinI64(y + h, CH);
+  I64 x0 = MaxI64(Px(x), 0), y0 = MaxI64(Px(y), 0);
+  I64 x1 = MinI64(Px(x + w), g_pw), y1 = MinI64(Px(y + h), g_ph);
   c->clip_x0 = x0;
   c->clip_y0 = y0;
   c->clip_x1 = x1;
   c->clip_y1 = y1;
 }
 
+// Matches the buffer, scale and fonts to the window's current pixel size.
+// The scale keeps at least MIN_W x MIN_H units on screen.
+Bool CanvasResize(Canvas *c)
+{
+  I32 w, h;
+  SDL_GetRendererOutputSize(c->renderer, &w, &h);
+  if (w <= 0 || h <= 0)
+    return FALSE;
+  if (w == g_pw && h == g_ph && c->pixels != NULL)
+    return TRUE;
+  I64 s = MinI64(h * 1000 / MIN_H, w * 1000 / MIN_W);
+  s = MaxI64(s, 500);
+  g_s = s;
+  g_pw = w;
+  g_ph = h;
+  g_cw = Un(w);
+  g_ch = Un(h);
+  if (c->pixels != NULL)
+    Free(c->pixels);
+  c->pixels = CAlloc(g_pw * g_ph * 4);
+  if (c->texture != NULL)
+    SDL_DestroyTexture(c->texture);
+  c->texture = SDL_CreateTexture(c->renderer, SDL_PIXELFORMAT_ARGB8888,
+                                 SDL_TEXTUREACCESS_STREAMING, g_pw, g_ph);
+  ClipAll(c);
+  return c->texture != NULL && LoadFonts(c);
+}
+
 Bool CanvasOpen(Canvas *c, U8 *title, U8 *font_dir)
 {
   if (SDL_Init(SDL_INIT_VIDEO) != 0 || TTF_Init() != 0)
     return FALSE;
-  SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1");
-  c->window = SDL_CreateWindow(title, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                               CW, CH, SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE);
+  CopyText(c->font_dir, font_dir, 512);
+  c->window = SDL_CreateWindow(title, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, 1440, 900,
+                               SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
   if (c->window == NULL)
     return FALSE;
-  SDL_SetWindowMinimumSize(c->window, CW / 2, CH / 2);
+  SDL_SetWindowMinimumSize(c->window, 900, 600);
   c->renderer = SDL_CreateRenderer(c->window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
   if (c->renderer == NULL)
     return FALSE;
-  c->texture = SDL_CreateTexture(c->renderer, SDL_PIXELFORMAT_ARGB8888,
-                                 SDL_TEXTUREACCESS_STREAMING, CW, CH);
-  if (c->texture == NULL)
-    return FALSE;
-  c->pixels = CAlloc(CW * CH * 4);
-  ClipAll(c);
-  Bool ok = LoadFont(c, F_SMALL, font_dir, "Inter-Regular.ttf", 12) &&
-            LoadFont(c, F_BODY, font_dir, "Inter-Regular.ttf", 13) &&
-            LoadFont(c, F_MED, font_dir, "Inter-Medium.ttf", 14) &&
-            LoadFont(c, F_LABEL, font_dir, "Inter-SemiBold.ttf", 11) &&
-            LoadFont(c, F_H2, font_dir, "Inter-SemiBold.ttf", 15) &&
-            LoadFont(c, F_H1, font_dir, "Inter-SemiBold.ttf", 22) &&
-            LoadFont(c, F_BIG, font_dir, "Inter-Bold.ttf", 40) &&
-            LoadFont(c, F_MONO, font_dir, "JetBrainsMono-Regular.ttf", 12) &&
-            LoadFont(c, F_BTN, font_dir, "Inter-Bold.ttf", 14) &&
-            LoadFont(c, F_SEMI, font_dir, "Inter-SemiBold.ttf", 13);
-  if (!ok)
+  if (!CanvasResize(c))
     return FALSE;
   SDL_StartTextInput();
   return TRUE;
@@ -215,41 +281,49 @@ U0 CanvasClose(Canvas *c)
 
 // ---- shapes ---------------------------------------------------------------
 
-U0 Fill(Canvas *c, I64 x, I64 y, I64 w, I64 h, U32 color)
+// Pixel rectangle, clipped.
+U0 FillPx(Canvas *c, I64 x0, I64 y0, I64 x1, I64 y1, U32 color)
 {
-  I64 x0 = MaxI64(x, c->clip_x0), y0 = MaxI64(y, c->clip_y0);
-  I64 x1 = MinI64(x + w, c->clip_x1), y1 = MinI64(y + h, c->clip_y1);
+  x0 = MaxI64(x0, c->clip_x0);
+  y0 = MaxI64(y0, c->clip_y0);
+  x1 = MinI64(x1, c->clip_x1);
+  y1 = MinI64(y1, c->clip_y1);
   for (I64 py = y0; py < y1; py++) {
-    U32 *row = &c->pixels[py * CW];
+    U32 *row = &c->pixels[py * g_pw];
     for (I64 px = x0; px < x1; px++)
       row[px] = color;
   }
+}
+
+U0 Fill(Canvas *c, I64 x, I64 y, I64 w, I64 h, U32 color)
+{
+  FillPx(c, Px(x), Px(y), Px(x + w), Px(y + h), color);
 }
 
 U0 Blend(Canvas *c, I64 x, I64 y, U32 color, I64 a)
 {
   if (a <= 0 || x < c->clip_x0 || y < c->clip_y0 || x >= c->clip_x1 || y >= c->clip_y1)
     return;
-  U32 *p = &c->pixels[y * CW + x];
+  U32 *p = &c->pixels[y * g_pw + x];
   if (a >= 255)
     *p = color;
   else
     *p = Mix(color, *p, a);
 }
 
-// Rounded rectangle. Corner pixels get partial coverage so edges stay smooth.
-U0 Round(Canvas *c, I64 x, I64 y, I64 w, I64 h, I64 r, U32 color)
+// Rounded rectangle in pixels. Corner pixels get partial coverage so edges
+// stay smooth: 16 samples per pixel in eighths, all integer, because F64
+// arguments to C functions don't survive hcc's calling convention.
+U0 RoundPx(Canvas *c, I64 x, I64 y, I64 w, I64 h, I64 r, U32 color)
 {
   r = MinI64(r, MinI64(w, h) / 2);
   if (r <= 0) {
-    Fill(c, x, y, w, h, color);
+    FillPx(c, x, y, x + w, y + h, color);
     return;
   }
-  Fill(c, x + r, y, w - 2 * r, h, color);
-  Fill(c, x, y + r, r, h - 2 * r, color);
-  Fill(c, x + w - r, y + r, r, h - 2 * r, color);
-  // 16 samples per corner pixel, in eighths of a pixel, all integer:
-  // F64 arguments to C functions don't survive hcc's calling convention.
+  FillPx(c, x + r, y, x + w - r, y + h, color);
+  FillPx(c, x, y + r, x + r, y + h - r, color);
+  FillPx(c, x + w - r, y + r, x + w, y + h - r, color);
   I64 rr = r * 8 * r * 8;
   for (I64 dy = 0; dy < r; dy++) {
     for (I64 dx = 0; dx < r; dx++) {
@@ -273,16 +347,36 @@ U0 Round(Canvas *c, I64 x, I64 y, I64 w, I64 h, I64 r, U32 color)
   }
 }
 
-// A rounded box with a one-pixel border.
+U0 Round(Canvas *c, I64 x, I64 y, I64 w, I64 h, I64 r, U32 color)
+{
+  I64 x0 = Px(x), y0 = Px(y);
+  RoundPx(c, x0, y0, Px(x + w) - x0, Px(y + h) - y0, Px(r), color);
+}
+
+// Border width in pixels: one unit, at least one pixel.
+I64 Hair()
+{
+  return MaxI64(1, Px(1));
+}
+
+// A rounded box with a one-unit border.
 U0 Box(Canvas *c, I64 x, I64 y, I64 w, I64 h, I64 r, U32 fill, U32 border)
 {
-  Round(c, x, y, w, h, r, border);
-  Round(c, x + 1, y + 1, w - 2, h - 2, MaxI64(0, r - 1), fill);
+  I64 x0 = Px(x), y0 = Px(y), pw = Px(x + w) - x0, ph = Px(y + h) - y0, pr = Px(r), b = Hair();
+  RoundPx(c, x0, y0, pw, ph, pr, border);
+  RoundPx(c, x0 + b, y0 + b, pw - 2 * b, ph - 2 * b, MaxI64(0, pr - b), fill);
 }
 
 U0 HLine(Canvas *c, I64 x, I64 y, I64 w, U32 color)
 {
-  Fill(c, x, y, w, 1, color);
+  I64 y0 = Px(y);
+  FillPx(c, Px(x), y0, Px(x + w), y0 + Hair(), color);
+}
+
+U0 VLine(Canvas *c, I64 x, I64 y, I64 h, U32 color)
+{
+  I64 x0 = Px(x);
+  FillPx(c, x0, Px(y), x0 + Hair(), Px(y + h), color);
 }
 
 U0 Dot(Canvas *c, I64 cx, I64 cy, I64 d, U32 color)
@@ -292,21 +386,30 @@ U0 Dot(Canvas *c, I64 cx, I64 cy, I64 d, U32 color)
 
 // ---- text -----------------------------------------------------------------
 
-I64 TextWidth(Canvas *c, I64 f, U8 *text, I64 n = -1)
+I64 AdvPx(Font *font, I64 ch)
+{
+  if (ch >= 32 && ch < 128)
+    return font->g[ch - 32].adv;
+  return 0;
+}
+
+I64 TextWidthPx(Canvas *c, I64 f, U8 *text, I64 n = -1)
 {
   Font *font = &c->font[f];
   I64 w = 0;
-  for (I64 i = 0; text[i] && (n < 0 || i < n); i++) {
-    I64 ch = text[i];
-    if (ch >= 32 && ch < 128)
-      w += font->g[ch - 32].adv;
-  }
+  for (I64 i = 0; text[i] && (n < 0 || i < n); i++)
+    w += AdvPx(font, text[i]);
   return w;
+}
+
+I64 TextWidth(Canvas *c, I64 f, U8 *text, I64 n = -1)
+{
+  return Un(TextWidthPx(c, f, text, n));
 }
 
 I64 TextHeight(Canvas *c, I64 f)
 {
-  return c->font[f].height;
+  return Un(c->font[f].height);
 }
 
 I64 DrawGlyph(Canvas *c, Font *font, I64 x, I64 y, I64 ch, U32 color)
@@ -329,42 +432,41 @@ I64 DrawGlyph(Canvas *c, Font *font, I64 x, I64 y, I64 ch, U32 color)
   return x + g->adv;
 }
 
-// Draws text with its top at y. Text wider than max_w is cut and ends in
-// "...". Returns the x after the last glyph.
+// Draws text with its top at y (units). Text wider than max_w is cut and
+// ends in "...". Returns the x after the last glyph, in units.
 I64 Text(Canvas *c, I64 f, I64 x, I64 y, U8 *text, U32 color, I64 max_w = 100000, I64 n = -1)
 {
   Font *font = &c->font[f];
   I64 len = StrLen(text);
   if (n >= 0 && n < len)
     len = n;
-  I64 full = TextWidth(c, f, text, len);
-  if (full <= max_w) {
+  I64 px = Px(x), py = Px(y), room = Px(max_w);
+  if (max_w >= 100000)
+    room = 1 << 40;
+  if (TextWidthPx(c, f, text, len) <= room) {
     for (I64 i = 0; i < len; i++)
-      x = DrawGlyph(c, font, x, y, text[i], color);
-    return x;
+      px = DrawGlyph(c, font, px, py, text[i], color);
+    return Un(px);
   }
-  I64 dots = TextWidth(c, f, "...");
-  I64 room = max_w - dots, used = 0, i = 0;
+  I64 dots = TextWidthPx(c, f, "...");
+  I64 used = 0, i = 0;
   while (i < len) {
-    I64 ch = text[i];
-    I64 adv = 0;
-    if (ch >= 32 && ch < 128)
-      adv = font->g[ch - 32].adv;
-    if (used + adv > room)
+    I64 adv = AdvPx(font, text[i]);
+    if (used + adv > room - dots)
       break;
     used += adv;
-    x = DrawGlyph(c, font, x, y, ch, color);
+    px = DrawGlyph(c, font, px, py, text[i], color);
     i++;
   }
   for (i = 0; i < 3; i++)
-    x = DrawGlyph(c, font, x, y, '.', color);
-  return x;
+    px = DrawGlyph(c, font, px, py, '.', color);
+  return Un(px);
 }
 
 // Text vertically centred on cy.
 I64 TextMid(Canvas *c, I64 f, I64 x, I64 cy, U8 *text, U32 color, I64 max_w = 100000)
 {
-  return Text(c, f, x, cy - c->font[f].height / 2, text, color, max_w);
+  return Text(c, f, x, cy - TextHeight(c, f) / 2, text, color, max_w);
 }
 
 I64 TextRight(Canvas *c, I64 f, I64 right, I64 y, U8 *text, U32 color)
@@ -372,24 +474,22 @@ I64 TextRight(Canvas *c, I64 f, I64 right, I64 y, U8 *text, U32 color)
   return Text(c, f, right - TextWidth(c, f, text), y, text, color);
 }
 
-// Splits text into lines no wider than max_w, breaking at spaces where it
-// can. starts and lens get one item per line. Returns the line count.
+// Splits text into lines no wider than max_w units, breaking at spaces
+// where it can. starts and lens get one item per line. Returns the count.
 I64 Wrap(Canvas *c, I64 f, U8 *text, I64 max_w, I64 *starts, I64 *lens, I64 max_lines)
 {
   Font *font = &c->font[f];
+  I64 room = Px(max_w);
   I64 n = 0, i = 0, len = StrLen(text);
   while (i < len && n < max_lines) {
     while (text[i] == ' ')
       i++;
     I64 start = i, w = 0, last_space = -1;
     while (i < len) {
-      I64 ch = text[i];
-      I64 adv = 0;
-      if (ch >= 32 && ch < 128)
-        adv = font->g[ch - 32].adv;
-      if (w + adv > max_w && i > start)
+      I64 adv = AdvPx(font, text[i]);
+      if (w + adv > room && i > start)
         break;
-      if (ch == ' ')
+      if (text[i] == ' ')
         last_space = i;
       w += adv;
       i++;
@@ -412,41 +512,21 @@ I64 Wrap(Canvas *c, I64 f, U8 *text, I64 max_w, I64 *starts, I64 *lens, I64 max_
 
 U0 Present(Canvas *c)
 {
-  SDL_UpdateTexture(c->texture, NULL, c->pixels, CW * 4);
-  I32 w, h;
-  SDL_GetRendererOutputSize(c->renderer, &w, &h);
-  SdlRect dst;
-  if (w * CH > h * CW) {
-    dst.h = h;
-    dst.w = h * CW / CH;
-  } else {
-    dst.w = w;
-    dst.h = w * CH / CW;
-  }
-  dst.x = (w - dst.w) / 2;
-  dst.y = (h - dst.h) / 2;
-  SDL_SetRenderDrawColor(c->renderer, 0x0B, 0x10, 0x20, 0xFF);
-  SDL_RenderClear(c->renderer);
-  SDL_RenderCopy(c->renderer, c->texture, NULL, &dst);
-  MemCpy(&c->shown, &dst, sizeof(SdlRect));
+  SDL_UpdateTexture(c->texture, NULL, c->pixels, g_pw * 4);
+  SDL_RenderCopy(c->renderer, c->texture, NULL, NULL);
   SDL_RenderPresent(c->renderer);
 }
 
-// Turns a mouse position in window coordinates into canvas pixels. Window
-// and renderer sizes differ on scaled displays, so it converts between them.
+// Turns a mouse position in window coordinates into units. Window and
+// renderer sizes differ on scaled (HiDPI) displays, so it converts.
 Bool CanvasPoint(Canvas *c, I64 x, I64 y, I64 *cx, I64 *cy)
 {
-  I32 win_w, win_h, out_w, out_h;
+  I32 win_w, win_h;
   SDL_GetWindowSize(c->window, &win_w, &win_h);
-  SDL_GetRendererOutputSize(c->renderer, &out_w, &out_h);
-  if (win_w <= 0 || win_h <= 0 || c->shown.w <= 0 || c->shown.h <= 0)
+  if (win_w <= 0 || win_h <= 0)
     return FALSE;
-  I64 px = x * out_w / win_w - c->shown.x;
-  I64 py = y * out_h / win_h - c->shown.y;
-  if (px < 0 || py < 0 || px >= c->shown.w || py >= c->shown.h)
-    return FALSE;
-  *cx = px * CW / c->shown.w;
-  *cy = py * CH / c->shown.h;
+  *cx = Un(x * g_pw / win_w);
+  *cy = Un(y * g_ph / win_h);
   return TRUE;
 }
 
@@ -457,17 +537,17 @@ U0 CanvasDump(Canvas *c, U8 *path)
   if (fd < 0)
     return;
   U8 head[32];
-  snprintf(head, 32, "P6\n%d %d\n255\n", CW, CH);
+  snprintf(head, 32, "P6\n%d %d\n255\n", g_pw, g_ph);
   WriteAll(fd, head, StrLen(head));
-  U8 *rgb = MAlloc(CW * 3);
-  for (I64 y = 0; y < CH; y++) {
-    for (I64 x = 0; x < CW; x++) {
-      U32 p = c->pixels[y * CW + x];
+  U8 *rgb = MAlloc(g_pw * 3);
+  for (I64 y = 0; y < g_ph; y++) {
+    for (I64 x = 0; x < g_pw; x++) {
+      U32 p = c->pixels[y * g_pw + x];
       rgb[x * 3] = p >> 16;
       rgb[x * 3 + 1] = p >> 8;
       rgb[x * 3 + 2] = p;
     }
-    WriteAll(fd, rgb, CW * 3);
+    WriteAll(fd, rgb, g_pw * 3);
   }
   Free(rgb);
   close(fd);

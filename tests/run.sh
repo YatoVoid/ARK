@@ -19,6 +19,8 @@ rm -rf build/tmp-log && mkdir -p build/tmp-log
 run test_log
 run test_deadlines
 SDL_VIDEODRIVER=offscreen run test_ui
+echo "== test_watch"
+python3 -I tests/test_watch.py || failed=1
 
 tmp=$(mktemp -d)
 socat "pty,raw,echo=0,link=$tmp/a" "pty,raw,echo=0,link=$tmp/b" &

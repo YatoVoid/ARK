@@ -17,13 +17,14 @@
 #define PASS_MIN    8
 
 #define V_OVERVIEW  0
-#define V_LOG       1
-#define V_SCOPE     2
-#define V_CLOCKS    3
-#define V_TEAM      4
-#define V_NETWORK   5
-#define V_GUIDE     6
-#define VIEWS       7
+#define V_SERVER    1
+#define V_LOG       2   // the chat log: notes, chat, alerts, scope, team
+#define V_SCOPE     3
+#define V_CLOCKS    4
+#define V_TEAM      5
+#define V_NETWORK   6
+#define V_GUIDE     7
+#define VIEWS       8
 
 #define FLD_SETUP    0
 #define FLD_COMPOSE  1
@@ -38,6 +39,12 @@
 #define FILTER_CHAT  2
 #define FILTER_SCOPE 3
 #define FILTER_TEAM  4
+
+#define SF_ALL       0
+#define SF_SUS       1
+#define SF_COMMANDS  2
+#define SF_LOGINS    3
+#define SF_REQUESTS  4
 
 // What a click on a hit region does.
 #define H_NAV        1
@@ -63,6 +70,9 @@
 #define H_RESTORE    21
 #define H_ACK        22
 #define H_LOCK       23
+#define H_EVENT      24
+#define H_REPORT     25
+#define H_SFILTER    26
 #define HITS         192
 
 // Layout.
@@ -70,13 +80,9 @@
 #define TOP_H    64
 #define PANEL_W  272
 #define MAIN_X   SIDE_W
-#define MAIN_W   (CW - SIDE_W - PANEL_W)
-#define PANEL_X  (CW - PANEL_W)
 #define PAD      24
 #define CX0      (MAIN_X + PAD)
-#define CXW      (MAIN_W - 2 * PAD)
 #define COMPOSE_H 52
-#define COMPOSE_Y (CH - 20 - COMPOSE_H)
 
 #define MAX_ASSETS  32
 #define MAX_MEMBERS 32
@@ -89,7 +95,7 @@ U8 *g_phase_help[5] = {
   "removing the attacker and their tools",
   "restoring systems and watching for a return"
 };
-U8 *g_view_names[VIEWS] = {"Overview", "Incident log", "Scope", "Breach clocks", "Team", "Network", "Guide"};
+U8 *g_view_names[VIEWS] = {"Overview", "Server log", "Chat log", "Scope", "Breach clocks", "Team", "Network", "Guide"};
 U8 *g_data_types[5] = {"PII", "PHI", "PCI", "CRED", "OTHER"};
 U8 *g_type_short[5] = {"names with SSN or ID", "health records", "card numbers", "logins, passwords", "anything else"};
 U8 *g_scope_status[5] = {"ENCRYPTED", "EXFILTRATED", "SUSPECTED", "CONTAINED", "CLEAN"};
@@ -97,6 +103,7 @@ U8 *g_status_short[5] = {"locked by ransomware", "copied out", "not confirmed ye
 U8 *g_where_picks[5] = {"TX", "CA", "NY", "EU", "-"};
 U8 *g_where_labels[5] = {"TX", "CA", "NY", "EU", "None"};
 U8 *g_filter_names[5] = {"All", "Notes", "Chat", "Scope", "Team"};
+U8 *g_sfilter_names[5] = {"All", "Suspicious", "Commands", "Logins", "Requests"};
 U8 *g_month[12] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
 U8 *g_wday[7] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
 
@@ -108,7 +115,6 @@ class Tm
 };
 extern "c" Tm *localtime_r(I64 *t, Tm *out);
 extern "c" I32 access(U8 *path, I32 mode);
-extern "c" U8 *strcasestr(U8 *hay, U8 *needle);
 extern "c" U8 *getenv(U8 *name);
 extern "c" I32 system(U8 *command);
 
@@ -184,6 +190,23 @@ class App
   Bool panel_join;        // join request already beeped for
   Bool panel_cut;         // light state last sent
   I64 order[LOG_MAX];
+  I64 server_filter;
+  I64 server_scroll;      // events scrolled down from the newest
+  I64 selected;           // entry index of the picked server event, or -1
+  I64 risk[LOG_MAX];      // RISK_ per entry index, worked out once
+  U8 *why[LOG_MAX];
+  I64 risk_done;          // entries [0, risk_done) have a risk
+  U8 reported[64][12];    // event refs named by alerts, rebuilt each frame
+  I64 reported_count;
+  I64 sus_open;           // suspicious events nobody has reported yet
+  I32 feed_fd;            // DIR/feed from tools/ark-watch, -1 until it exists
+  I64 feed_off;
+  I64 feed_tried;
+  U8 feed_line[1100];
+  I64 feed_len;
+  I64 feed_window;        // start of the current rate window
+  I64 feed_posted;        // events posted in it
+  I64 feed_dropped;
   Asset assets[MAX_ASSETS];
   I64 asset_count;
   Member members[MAX_MEMBERS];
@@ -597,6 +620,101 @@ Bool PassesFilter(App *a, Entry *e, U8 *text)
   return TRUE;
 }
 
+// ---- server events --------------------------------------------------------
+
+I64 EventCount(App *a)
+{
+  Log *log = a->st->log;
+  I64 n = 0;
+  for (I64 i = 0; i < log->count; i++)
+    if (log->entries[i].kind == KIND_EVENT)
+      n++;
+  return n;
+}
+
+// The alert text without the "[ref] " that ties a report to its event.
+U8 *AlertText(U8 *body)
+{
+  if (body[0] == '[' && StrLen(body) > 11 && body[9] == ']' && body[10] == ' ')
+    return body + 11;
+  return body;
+}
+
+// Works out the risk of entries added since the last call, then which
+// events alerts have already reported and how many suspicious ones haven't.
+U0 RefreshRisk(App *a)
+{
+  Log *log = a->st->log;
+  if (a->risk_done > log->count)
+    a->risk_done = 0;
+  for (I64 i = a->risk_done; i < log->count; i++) {
+    Entry *e = &log->entries[i];
+    a->risk[i] = RISK_NONE;
+    a->why[i] = "";
+    Event ev;
+    if (e->kind == KIND_EVENT && e->status == ST_OK && EventFromBody(e->body, &ev)) {
+      Tm tm;
+      localtime_r(&e->time, &tm);
+      a->risk[i] = EventRisk(&ev, tm.hour, &a->why[i]);
+    }
+  }
+  a->risk_done = log->count;
+  a->reported_count = 0;
+  for (I64 i = 0; i < log->count && a->reported_count < 64; i++) {
+    Entry *e = &log->entries[i];
+    if (e->kind == KIND_ALERT && e->status == ST_OK && AlertText(e->body) != e->body) {
+      MemCpy(a->reported[a->reported_count], e->body + 1, 8);
+      a->reported[a->reported_count][8] = 0;
+      a->reported_count++;
+    }
+  }
+  a->sus_open = 0;
+  for (I64 i = 0; i < log->count; i++) {
+    if (a->risk[i] != RISK_SUS)
+      continue;
+    U8 ref[12];
+    EntryRef(&log->entries[i], ref);
+    Bool done = FALSE;
+    for (I64 k = 0; k < a->reported_count; k++)
+      if (StrCmp(a->reported[k], ref) == 0)
+        done = TRUE;
+    if (!done)
+      a->sus_open++;
+  }
+}
+
+// The alert that reported this event, or NULL.
+Entry *ReportOf(App *a, Entry *ev)
+{
+  U8 ref[12];
+  EntryRef(ev, ref);
+  Log *log = a->st->log;
+  for (I64 i = 0; i < log->count; i++) {
+    Entry *e = &log->entries[i];
+    if (e->kind == KIND_ALERT && e->status == ST_OK && e->body[0] == '[' && StrNCmp(e->body + 1, ref, 8) == 0)
+      return e;
+  }
+  return NULL;
+}
+
+Bool ServerPasses(App *a, I64 idx, Event *ev)
+{
+  I64 f = a->server_filter;
+  if (f == SF_SUS && a->risk[idx] != RISK_SUS)
+    return FALSE;
+  if (f == SF_COMMANDS && ev->source != EV_SHELL && ev->source != EV_SUDO)
+    return FALSE;
+  if (f == SF_LOGINS && ev->source != EV_LOGIN && ev->source != EV_FAIL && ev->source != EV_ACCOUNT)
+    return FALSE;
+  if (f == SF_REQUESTS && ev->source != EV_REQUEST)
+    return FALSE;
+  Field *q = &a->fields[FLD_SEARCH];
+  if (q->len > 0 && strcasestr(ev->detail, q->text) == NULL && strcasestr(ev->user, q->text) == NULL &&
+      strcasestr(ev->host, q->text) == NULL)
+    return FALSE;
+  return TRUE;
+}
+
 // ---- widgets --------------------------------------------------------------
 
 U0 AddHit(App *a, I64 x, I64 y, I64 w, I64 h, I64 id, I64 arg = 0)
@@ -741,9 +859,9 @@ U0 Choice(App *a, I64 x, I64 y, I64 w, I64 h, U8 *title, U8 *desc, Bool on, U32 
 U0 PageHead(App *a, U8 *title, U8 *sub)
 {
   Canvas *c = a->cv;
-  Text(a->cv, F_H1, CX0, TOP_H + 18, title, C_TEXT, CXW - 260);
+  Text(a->cv, F_H1, CX0, TOP_H + 18, title, C_TEXT, (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 260);
   if (sub != NULL)
-    Text(c, F_BODY, CX0, TOP_H + 50, sub, C_MUTED, CXW - 260);
+    Text(c, F_BODY, CX0, TOP_H + 50, sub, C_MUTED, (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 260);
 }
 
 // ---- frame: sidebar, top bar, control panel -------------------------------
@@ -752,8 +870,8 @@ U0 DrawSide(App *a)
 {
   Canvas *c = a->cv;
   Log *log = a->st->log;
-  Fill(c, 0, 0, SIDE_W, CH, C_PANEL);
-  Fill(c, SIDE_W - 1, 0, 1, CH, C_LINE);
+  Fill(c, 0, 0, SIDE_W, g_ch, C_PANEL);
+  Fill(c, SIDE_W - 1, 0, 1, g_ch, C_LINE);
   Text(c, F_H1, 20, 18, "ARK", C_TEXT);
   Text(c, F_SMALL, 74, 26, "off-network incident log", C_FAINT);
 
@@ -794,7 +912,13 @@ U0 DrawSide(App *a)
     badge[0] = 0;
     U32 bcol = C_FAINT;
     if (v == V_LOG)
-      Commas(log->count, badge);
+      Commas(log->count - EventCount(a), badge);
+    if (v == V_SERVER && a->sus_open > 0) {
+      snprintf(badge, 24, "%ld", a->sus_open);
+      bcol = C_RED;
+    } else if (v == V_SERVER && EventCount(a) > 0) {
+      Commas(EventCount(a), badge);
+    }
     if (v == V_SCOPE && a->asset_count > 0)
       snprintf(badge, 24, "%ld", a->asset_count);
     if (v == V_CLOCKS && nclocks > 0) {
@@ -832,16 +956,16 @@ U0 DrawSide(App *a)
     y += 40;
   }
 
-  HLine(c, 0, CH - 92, SIDE_W - 1, C_LINE);
-  Text(c, F_SEMI, 20, CH - 76, a->st->name, C_TEXT, SIDE_W - 40);
+  HLine(c, 0, g_ch - 92, SIDE_W - 1, C_LINE);
+  Text(c, F_SEMI, 20, g_ch - 76, a->st->name, C_TEXT, SIDE_W - 40);
   if (IsAdmin(a->st))
-    Text(c, F_SMALL, 20, CH - 56, "Manager, this station", C_MUTED);
+    Text(c, F_SMALL, 20, g_ch - 56, "Manager, this station", C_MUTED);
   else
-    Text(c, F_SMALL, 20, CH - 56, "Member, this station", C_MUTED);
+    Text(c, F_SMALL, 20, g_ch - 56, "Member, this station", C_MUTED);
   U8 fp[32], keyline[40];
   Fingerprint(a->st->pk, fp);
   snprintf(keyline, 40, "key %s", fp);
-  Text(c, F_MONO, 20, CH - 36, keyline, C_FAINT);
+  Text(c, F_MONO, 20, g_ch - 36, keyline, C_FAINT);
 }
 
 // A status chip in the top bar: coloured dot and a short label.
@@ -861,13 +985,13 @@ U0 Chip(App *a, I64 x, I64 w, U8 *label, U32 color, I64 view)
 U0 DrawTop(App *a)
 {
   Canvas *c = a->cv;
-  Fill(c, MAIN_X, 0, CW - MAIN_X, TOP_H, C_BG);
-  HLine(c, MAIN_X, TOP_H - 1, CW - MAIN_X, C_LINE);
+  Fill(c, MAIN_X, 0, g_cw - MAIN_X, TOP_H, C_BG);
+  HLine(c, MAIN_X, TOP_H - 1, g_cw - MAIN_X, C_LINE);
 
-  Input(a, FLD_SEARCH, CX0, 14, 260, 36, "Search the log  (Ctrl+F)");
+  Input(a, FLD_SEARCH, CX0, 14, 220, 36, "Search  (Ctrl+F)");
 
   I64 phase = IncidentPhase(a);
-  I64 x = CX0 + 276, w = 112;
+  I64 x = CX0 + 236, w = 104;
   for (I64 p = 1; p <= 4; p++) {
     U32 bg = C_BG, border = C_LINE, fg = C_FAINT;
     if (p < phase) {
@@ -914,28 +1038,28 @@ U0 DrawTop(App *a)
   } else {
     StrCpy(integ, "Log intact");
   }
-  Chip(a, CW - 16 - 136, 136, integ, ic, V_LOG);
-  Chip(a, CW - 16 - 136 * 2 - 8, 136, relay, rc, V_NETWORK);
+  Chip(a, g_cw - 16 - 136, 136, integ, ic, V_LOG);
+  Chip(a, g_cw - 16 - 136 * 2 - 8, 136, relay, rc, V_NETWORK);
   if (IsCut(a))
-    Chip(a, CW - 16 - 136 * 3 - 16, 136, "Internet: CUT", C_RED, V_NETWORK);
+    Chip(a, g_cw - 16 - 136 * 3 - 16, 136, "Internet: CUT", C_RED, V_NETWORK);
   else
-    Chip(a, CW - 16 - 136 * 3 - 16, 136, "Internet: on", C_GREEN, V_NETWORK);
+    Chip(a, g_cw - 16 - 136 * 3 - 16, 136, "Internet: on", C_GREEN, V_NETWORK);
 }
 
 // One status light in the control panel.
 U0 Light(App *a, I64 y, U8 *label, U8 *state, U32 color)
 {
   Canvas *c = a->cv;
-  Dot(c, PANEL_X + 28, y, 12, color);
-  TextMid(c, F_BODY, PANEL_X + 44, y, label, C_MUTED);
-  TextMid(c, F_SEMI, CW - 20 - TextWidth(c, F_SEMI, state), y, state, LightOf(color));
+  Dot(c, (g_cw - PANEL_W) + 28, y, 12, color);
+  TextMid(c, F_BODY, (g_cw - PANEL_W) + 44, y, label, C_MUTED);
+  TextMid(c, F_SEMI, g_cw - 20 - TextWidth(c, F_SEMI, state), y, state, LightOf(color));
 }
 
 // A big hardware-style button: a darker lip under the face.
 U0 PanelButton(App *a, I64 y, U8 *label, U8 *sub, U32 face, U32 lip, Bool on, I64 id)
 {
   Canvas *c = a->cv;
-  I64 x = PANEL_X + 16, w = PANEL_W - 32;
+  I64 x = (g_cw - PANEL_W) + 16, w = PANEL_W - 32;
   U32 fg = C_TEXT, sfg = Mix(C_TEXT, face, 190);
   if (!on) {
     face = Mix(face, C_PANEL, 70);
@@ -956,9 +1080,9 @@ U0 PanelButton(App *a, I64 y, U8 *label, U8 *sub, U32 face, U32 lip, Bool on, I6
 U0 DrawPanel(App *a)
 {
   Canvas *c = a->cv;
-  Fill(c, PANEL_X, TOP_H, PANEL_W, CH - TOP_H, C_PANEL);
-  Fill(c, PANEL_X, TOP_H, 1, CH - TOP_H, C_LINE);
-  I64 x = PANEL_X + 16, w = PANEL_W - 32;
+  Fill(c, (g_cw - PANEL_W), TOP_H, PANEL_W, g_ch - TOP_H, C_PANEL);
+  Fill(c, (g_cw - PANEL_W), TOP_H, 1, g_ch - TOP_H, C_LINE);
+  I64 x = (g_cw - PANEL_W) + 16, w = PANEL_W - 32;
   Text(c, F_LABEL, x, TOP_H + 20, "CONTROL PANEL", C_FAINT);
   if (a->panel_fd >= 0)
     TextRight(c, F_SMALL, x + w, TOP_H + 19, "hardware connected", C_GREEN_FG);
@@ -984,7 +1108,7 @@ U0 DrawPanel(App *a)
     U8 name[NAME_MAX];
     NameOf(a->st->log, alert->author, name);
     snprintf(title, 64, "ALERT from %s", name);
-    CopyText(sub, alert->body, 160);
+    CopyText(sub, AlertText(alert->body), 160);
     for (I64 i = 0; sub[i]; i++)
       if (sub[i] < 32)
         sub[i] = ' ';
@@ -1074,12 +1198,12 @@ U0 DrawPanel(App *a)
   else
     Light(a, y, "Deadlines", "NONE", C_GREEN);
 
-  HLine(c, PANEL_X + 1, CH - 64, PANEL_W - 1, C_LINE);
+  HLine(c, (g_cw - PANEL_W) + 1, g_ch - 64, PANEL_W - 1, C_LINE);
   Bool lock_armed = a->lock_armed != 0 && now - a->lock_armed <= 3;
   U8 *lock = "Lock station  (F12 twice)";
   if (lock_armed)
     lock = "Press again to lock";
-  Button(a, x, CH - 50, w, 34, lock, BTN_GHOST, H_LOCK);
+  Button(a, x, g_ch - 50, w, 34, lock, BTN_GHOST, H_LOCK);
 }
 
 // A short notice after an action, for six seconds, in the free space at
@@ -1093,7 +1217,7 @@ U0 DrawFlash(App *a)
   I64 w = SIDE_W - 24;
   I64 n = Wrap(c, F_MED, a->msg, w - 24, starts, lens, 3);
   I64 h = 20 + n * 18;
-  I64 y = CH - 92 - 16 - h;
+  I64 y = g_ch - 92 - 16 - h;
   Box(c, 12, y, w, h, 6, Mix(a->msg_color, C_PANEL, 40), a->msg_color);
   for (I64 i = 0; i < n; i++)
     Text(c, F_MED, 24, y + 10 + i * 18, a->msg + starts[i], a->msg_color, w - 24, lens[i]);
@@ -1104,8 +1228,8 @@ U0 DrawFlash(App *a)
 U0 DrawComposer(App *a)
 {
   Canvas *c = a->cv;
-  I64 y = COMPOSE_Y, x = CX0;
-  Card(a, x, y, CXW, COMPOSE_H);
+  I64 y = (g_ch - 20 - COMPOSE_H), x = CX0;
+  Card(a, x, y, (g_cw - SIDE_W - PANEL_W - 2 * PAD), COMPOSE_H);
   I64 bx = x + 8;
   for (I64 k = 0; k < 3; k++) {
     I64 kind = KIND_NOTE;
@@ -1140,8 +1264,8 @@ U0 DrawComposer(App *a)
     StrCpy(hint, "Alert the manager: what looks wrong and where. Their panel buzzes.");
   else
     StrCpy(hint, "Message the team. Chat is kept in the log too.");
-  Input(a, FLD_COMPOSE, bx + 4, y + 8, CXW - (bx - x) - 4 - 100, 36, hint);
-  Button(a, x + CXW - 92, y + 8, 84, 36, "Send", BTN_PRIMARY, H_SEND);
+  Input(a, FLD_COMPOSE, bx + 4, y + 8, (g_cw - SIDE_W - PANEL_W - 2 * PAD) - (bx - x) - 4 - 100, 36, hint);
+  Button(a, x + (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 92, y + 8, 84, 36, "Send", BTN_PRIMARY, H_SEND);
 }
 
 // ---- pages ----------------------------------------------------------------
@@ -1189,6 +1313,8 @@ U0 LogList(App *a, I64 x, I64 y, I64 w, I64 h, I64 scroll, Bool filtered)
   I64 n = 0, used = 0, skip = scroll;
   for (I64 k = log->count - 1; k >= 0 && n < LIST_MAX; k--) {
     Entry *e = &log->entries[a->order[k]];
+    if (e->kind == KIND_EVENT)
+      continue;
     EntryText(log, e, text);
     if (filtered && !PassesFilter(a, e, text))
       continue;
@@ -1236,12 +1362,12 @@ U0 DrawOverview(App *a)
   I64 y = TOP_H + 84;
   Clock clocks[RULES];
   I64 n = Deadlines(log, clocks);
-  Card(a, CX0, y, CXW, 108);
+  Card(a, CX0, y, (g_cw - SIDE_W - PANEL_W - 2 * PAD), 108);
   if (n == 0) {
     Text(c, F_LABEL, CX0 + 20, y + 20, "LEGAL DEADLINES", C_FAINT);
     Text(c, F_H2, CX0 + 20, y + 42, "No notice clock is running", C_TEXT);
-    Text(c, F_BODY, CX0 + 20, y + 68, "Clocks start when a system holding personal data is marked Exfiltrated or Encrypted.", C_MUTED, CXW - 200);
-    Button(a, CX0 + CXW - 160, y + 36, 140, 36, "Record scope", BTN_GHOST, H_SCOPE_OPEN);
+    Text(c, F_BODY, CX0 + 20, y + 68, "Clocks start when a system holding personal data is marked Exfiltrated or Encrypted.", C_MUTED, (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 200);
+    Button(a, CX0 + (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 160, y + 36, 140, 36, "Record scope", BTN_GHOST, H_SCOPE_OPEN);
   } else {
     I64 left = clocks[0].due - time(NULL);
     U8 rem[24], due[32], who[64];
@@ -1255,7 +1381,7 @@ U0 DrawOverview(App *a)
       snprintf(who, 64, "Notify %s (if 250+ records)", g_rule_who[clocks[0].rule]);
     else
       snprintf(who, 64, "Notify %s", g_rule_who[clocks[0].rule]);
-    Text(c, F_H2, mx + 24, y + 22, who, C_TEXT, CXW - 380 - 170);
+    Text(c, F_H2, mx + 24, y + 22, who, C_TEXT, (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 380 - 170);
     Text(c, F_MONO, mx + 24, y + 48, g_rule_cite[clocks[0].rule], C_FAINT);
     U8 dueline[48];
     snprintf(dueline, 48, "Due %s", due);
@@ -1265,12 +1391,12 @@ U0 DrawOverview(App *a)
       snprintf(more, 32, "All %ld clocks", n);
     else
       StrCpy(more, "Clock details");
-    Button(a, CX0 + CXW - 150, y + 36, 130, 36, more, BTN_GHOST, H_NAV, V_CLOCKS);
+    Button(a, CX0 + (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 150, y + 36, 130, 36, more, BTN_GHOST, H_NAV, V_CLOCKS);
   }
 
   // Affected systems on the left, things waiting on you on the right.
   y += 124;
-  I64 lw = 520, rw = CXW - lw - 16, h = 212;
+  I64 lw = ((g_cw - SIDE_W - PANEL_W - 2 * PAD) - 16) * 54 / 100, rw = (g_cw - SIDE_W - PANEL_W - 2 * PAD) - lw - 16, h = 212;
   Card(a, CX0, y, lw, h);
   CollectAssets(a);
   I64 hit = 0, records = 0;
@@ -1289,8 +1415,8 @@ U0 DrawOverview(App *a)
   snprintf(note, 48, "%ld recorded", a->asset_count);
   I64 ry = CardHead(a, CX0, y, lw, "Affected systems", note);
   if (a->asset_count == 0) {
-    Text(c, F_BODY, CX0 + 16, ry + 16, "Nothing recorded yet. Add each server, database or", C_MUTED);
-    Text(c, F_BODY, CX0 + 16, ry + 34, "file share as soon as you know it was touched.", C_MUTED);
+    Text(c, F_BODY, CX0 + 16, ry + 16, "Nothing recorded yet. Add each server, database or", C_MUTED, lw - 32);
+    Text(c, F_BODY, CX0 + 16, ry + 34, "file share as soon as you know it was touched.", C_MUTED, lw - 32);
     Button(a, CX0 + 16, ry + 66, 180, 36, "Add affected system", BTN_PRIMARY, H_SCOPE_OPEN);
   } else {
     U8 num[32], line[128];
@@ -1312,7 +1438,7 @@ U0 DrawOverview(App *a)
         snprintf(cnt, 24, "%s records", num);
       }
       snprintf(detail, 64, "%s  %s", as->type, cnt);
-      Text(c, F_SMALL, CX0 + 196, ry + 8, detail, C_MUTED, 170);
+      Text(c, F_SMALL, CX0 + 196, ry + 8, detail, C_MUTED, lw - 196 - 130);
       Badge(a, CX0 + lw - 16 - TextWidth(c, F_LABEL, as->status) - 14, ry + 16, as->status, StatusColor(as->status));
       ry += 32;
     }
@@ -1336,6 +1462,18 @@ U0 DrawOverview(App *a)
     Dot(c, rx + 20, ry + 20, 8, C_RED);
     Text(c, F_SEMI, rx + 32, ry + 11, line, C_RED_FG, rw - 172);
     Button(a, rx + rw - 136, ry + 4, 120, 30, "Acknowledge", BTN_GHOST, H_ACK);
+    ry += 40;
+    items++;
+  }
+  if (a->sus_open > 0 && !IsAdmin(a->st)) {
+    U8 line[80];
+    if (a->sus_open == 1)
+      StrCpy(line, "1 suspicious server event to check");
+    else
+      snprintf(line, 80, "%ld suspicious server events to check", a->sus_open);
+    Dot(c, rx + 20, ry + 20, 8, C_RED);
+    Text(c, F_SEMI, rx + 32, ry + 11, line, C_RED_FG, rw - 140);
+    Button(a, rx + rw - 92, ry + 4, 76, 30, "Review", BTN_GHOST, H_NAV, V_SERVER);
     ry += 40;
     items++;
   }
@@ -1395,14 +1533,14 @@ U0 DrawOverview(App *a)
   }
 
   y += h + 16;
-  I64 lh = COMPOSE_Y - 16 - y;
-  Card(a, CX0, y, CXW, lh);
-  ry = CardHead(a, CX0, y, CXW, "Latest entries");
-  Button(a, CX0 + CXW - 112, y + 6, 100, 30, "Open log", BTN_GHOST, H_NAV, V_LOG);
+  I64 lh = (g_ch - 20 - COMPOSE_H) - 16 - y;
+  Card(a, CX0, y, (g_cw - SIDE_W - PANEL_W - 2 * PAD), lh);
+  ry = CardHead(a, CX0, y, (g_cw - SIDE_W - PANEL_W - 2 * PAD), "Latest in the chat log");
+  Button(a, CX0 + (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 112, y + 6, 100, 30, "Open chat", BTN_GHOST, H_NAV, V_LOG);
   if (log->count == 0)
     Text(c, F_BODY, CX0 + 16, ry + 16, "Nothing logged yet. Write the first note below.", C_FAINT);
   else
-    LogList(a, CX0, ry, CXW, y + lh - ry, 0, FALSE);
+    LogList(a, CX0, ry, (g_cw - SIDE_W - PANEL_W - 2 * PAD), y + lh - ry, 0, FALSE);
   DrawComposer(a);
 }
 
@@ -1411,11 +1549,11 @@ U0 DrawLogPage(App *a)
   Canvas *c = a->cv;
   Log *log = a->st->log;
   U8 sub[128], num[24];
-  Commas(log->count, num);
-  snprintf(sub, 128, "%s entries. Each one is signed by its author and chained to the last.", num);
-  PageHead(a, "Incident log", sub);
+  Commas(log->count - EventCount(a), num);
+  snprintf(sub, 128, "%s entries: notes, chat, alerts and decisions. Each is signed and chained.", num);
+  PageHead(a, "Chat log", sub);
 
-  I64 x = CX0 + CXW;
+  I64 x = CX0 + (g_cw - SIDE_W - PANEL_W - 2 * PAD);
   for (I64 f = 4; f >= 0; f--) {
     I64 w = TextWidth(c, F_MED, g_filter_names[f]) + 26;
     x -= w;
@@ -1439,32 +1577,233 @@ U0 DrawLogPage(App *a)
   if (q->len > 0) {
     U8 line[256];
     snprintf(line, 256, "Showing entries that contain \"%s\"", q->text);
-    Text(c, F_BODY, CX0, y + 2, line, C_CYAN_FG, CXW - 140);
-    Button(a, CX0 + CXW - 120, y - 6, 120, 30, "Clear search", BTN_GHOST, H_SEARCH_CLR);
+    Text(c, F_BODY, CX0, y + 2, line, C_CYAN_FG, (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 140);
+    Button(a, CX0 + (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 120, y - 6, 120, 30, "Clear search", BTN_GHOST, H_SEARCH_CLR);
     y += 34;
   }
-  I64 h = COMPOSE_Y - 16 - y;
-  Card(a, CX0, y, CXW, h);
+  I64 h = (g_ch - 20 - COMPOSE_H) - 16 - y;
+  Card(a, CX0, y, (g_cw - SIDE_W - PANEL_W - 2 * PAD), h);
   if (log->count == 0) {
     Text(c, F_H2, CX0 + 20, y + 24, "Nothing logged yet", C_TEXT);
     Text(c, F_BODY, CX0 + 20, y + 50, "Write what was seen first, where and by whom. Times and names are added for you.", C_MUTED);
   } else {
-    LogList(a, CX0, y, CXW, h, a->scroll, TRUE);
+    LogList(a, CX0, y, (g_cw - SIDE_W - PANEL_W - 2 * PAD), h, a->scroll, TRUE);
     if (a->scroll > 0) {
       U8 note[64];
       snprintf(note, 64, "Scrolled back %ld. PgDn or wheel for newer.", a->scroll);
       I64 nw = TextWidth(c, F_SMALL, note) + 20;
-      Round(c, CX0 + CXW - nw - 12, y + h - 34, nw, 24, 4, C_RAISED);
-      TextMid(c, F_SMALL, CX0 + CXW - nw - 2, y + h - 22, note, C_MUTED);
+      Round(c, CX0 + (g_cw - SIDE_W - PANEL_W - 2 * PAD) - nw - 12, y + h - 34, nw, 24, 4, C_RAISED);
+      TextMid(c, F_SMALL, CX0 + (g_cw - SIDE_W - PANEL_W - 2 * PAD) - nw - 2, y + h - 22, note, C_MUTED);
     }
   }
   DrawComposer(a);
 }
 
+
+#define ROW_H 34
+
+U0 DrawServerPage(App *a)
+{
+  Canvas *c = a->cv;
+  Log *log = a->st->log;
+  U8 sub[160];
+  I64 events = EventCount(a);
+  if (a->sus_open == 1)
+    StrCpy(sub, "1 suspicious event nobody has reported yet.");
+  else if (a->sus_open > 1)
+    snprintf(sub, 160, "%ld suspicious events nobody has reported yet.", a->sus_open);
+  else
+    StrCpy(sub, "Commands, logins and requests on the server, newest first.");
+  PageHead(a, "Server log", sub);
+
+  I64 x = CX0 + (g_cw - SIDE_W - PANEL_W - 2 * PAD);
+  for (I64 f = 4; f >= 0; f--) {
+    I64 w = TextWidth(c, F_MED, g_sfilter_names[f]) + 26;
+    x -= w;
+    Bool on = a->server_filter == f;
+    U32 bg = C_BG, border = C_LINE2, fg = C_MUTED;
+    if (on && f == SF_SUS) {
+      bg = Mix(C_RED, C_BG, 40);
+      border = C_RED;
+      fg = C_RED_FG;
+    } else if (on) {
+      bg = C_RAISED;
+      border = C_CYAN;
+      fg = C_TEXT;
+    } else if (Hover(a, x, TOP_H + 22, w, 32)) {
+      fg = C_TEXT;
+    }
+    Box(c, x, TOP_H + 22, w, 32, 6, bg, border);
+    TextMid(c, F_MED, x + 13, TOP_H + 38, g_sfilter_names[f], fg);
+    AddHit(a, x, TOP_H + 22, w, 32, H_SFILTER, f);
+    x -= 6;
+  }
+
+  I64 y = TOP_H + 84;
+  Field *q = &a->fields[FLD_SEARCH];
+  if (q->len > 0) {
+    U8 line[256];
+    snprintf(line, 256, "Showing events that contain \"%s\"", q->text);
+    Text(c, F_BODY, CX0, y + 2, line, C_CYAN_FG, (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 140);
+    Button(a, CX0 + (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 120, y - 6, 120, 30, "Clear search", BTN_GHOST, H_SEARCH_CLR);
+    y += 34;
+  }
+
+  I64 detail_h = 150;
+  I64 h = g_ch - 20 - detail_h - 16 - y;
+  Card(a, CX0, y, (g_cw - SIDE_W - PANEL_W - 2 * PAD), h);
+  // Column header.
+  I64 cw = CX0 + 16, cu = CX0 + 92, ct = CX0 + 262, cd = CX0 + 360, dw = (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 360 - 128;
+  Text(c, F_LABEL, cw, y + 14, "TIME", C_FAINT);
+  Text(c, F_LABEL, cu, y + 14, "WHO, WHERE", C_FAINT);
+  Text(c, F_LABEL, ct, y + 14, "TYPE", C_FAINT);
+  Text(c, F_LABEL, cd, y + 14, "COMMAND OR REQUEST", C_FAINT);
+  TextRight(c, F_LABEL, CX0 + (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 16, y + 14, "RISK", C_FAINT);
+  HLine(c, CX0 + 1, y + 38, (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 2, C_LINE);
+
+  if (events == 0) {
+    Text(c, F_H2, CX0 + 20, y + 60, "No server events yet", C_TEXT);
+    Text(c, F_BODY, CX0 + 20, y + 88, "Start the watcher on the server this station runs on:", C_MUTED);
+    U8 cmd[320];
+    snprintf(cmd, 320, "tools/ark-watch %s", a->st->dir);
+    Box(c, CX0 + 20, y + 114, MinI64((g_cw - SIDE_W - PANEL_W - 2 * PAD) - 40, TextWidth(c, F_MONO, cmd) + 28), 34, 6, C_BG, C_LINE2);
+    TextMid(c, F_MONO, CX0 + 34, y + 131, cmd, C_CYAN_FG, (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 68);
+    Text(c, F_BODY, CX0 + 20, y + 166, "It sends shell commands, sudo, logins and failed logins here, signed by this station.", C_MUTED, (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 40);
+  }
+
+  LogSorted(log, a->order);
+  I64 ry = y + 39, skip = a->server_scroll, shown = 0;
+  for (I64 k = log->count - 1; k >= 0; k--) {
+    I64 idx = a->order[k];
+    Entry *e = &log->entries[idx];
+    Event ev;
+    if (e->kind != KIND_EVENT || !EventFromBody(e->body, &ev))
+      continue;
+    if (!ServerPasses(a, idx, &ev))
+      continue;
+    if (skip > 0) {
+      skip--;
+      continue;
+    }
+    if (ry + ROW_H > y + h - 2)
+      break;
+    Bool sel = a->selected == idx;
+    if (sel)
+      Fill(c, CX0 + 1, ry, (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 2, ROW_H - 1, C_RAISED);
+    else if (Hover(a, CX0, ry, (g_cw - SIDE_W - PANEL_W - 2 * PAD), ROW_H))
+      Fill(c, CX0 + 1, ry, (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 2, ROW_H - 1, Mix(C_RAISED, C_SURFACE, 110));
+    I64 cy = ry + ROW_H / 2;
+    U8 clock[12], who[96];
+    Tm tm;
+    localtime_r(&e->time, &tm);
+    snprintf(clock, 12, "%02d:%02d:%02d", tm.hour, tm.min, tm.sec);
+    TextMid(c, F_MONO, cw, cy, clock, C_FAINT);
+    if (StrCmp(ev.user, "-") == 0)
+      CopyText(who, ev.host, 96);
+    else
+      snprintf(who, 96, "%s@%s", ev.user, ev.host);
+    U32 wc = C_TEXT;
+    if (StrCmp(ev.user, "root") == 0)
+      wc = C_AMBER_FG;
+    TextMid(c, F_SEMI, cu, cy, who, wc, ct - cu - 10);
+    TextMid(c, F_SMALL, ct, cy, g_ev_label[ev.source], C_MUTED, cd - ct - 10);
+    U32 dc = C_TEXT;
+    if (a->risk[idx] == RISK_SUS)
+      dc = C_RED_FG;
+    TextMid(c, F_MONO, cd, cy, ev.detail, dc, dw);
+    if (a->risk[idx] == RISK_SUS) {
+      if (ReportOf(a, e) != NULL)
+        Badge(a, CX0 + (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 16 - TextWidth(c, F_LABEL, "REPORTED") - 14, cy, "REPORTED", C_PURPLE);
+      else
+        Badge(a, CX0 + (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 16 - TextWidth(c, F_LABEL, "SUSPICIOUS") - 14, cy, "SUSPICIOUS", C_RED);
+    } else if (a->risk[idx] == RISK_WATCH) {
+      Badge(a, CX0 + (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 16 - TextWidth(c, F_LABEL, "WATCH") - 14, cy, "WATCH", C_AMBER);
+    }
+    HLine(c, CX0 + 1, ry + ROW_H - 1, (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 2, C_ROWLINE);
+    AddHit(a, CX0, ry, (g_cw - SIDE_W - PANEL_W - 2 * PAD), ROW_H, H_EVENT, idx);
+    ry += ROW_H;
+    shown++;
+  }
+  if (shown == 0 && events > 0)
+    TextMid(c, F_BODY, CX0 + 16, y + 64, "No events match. Clear the search or pick All.", C_FAINT);
+  if (a->server_scroll > 0) {
+    U8 note[64];
+    snprintf(note, 64, "%ld newer above. PgUp or wheel up.", a->server_scroll);
+    I64 nw = TextWidth(c, F_SMALL, note) + 20;
+    Round(c, CX0 + (g_cw - SIDE_W - PANEL_W - 2 * PAD) - nw - 12, y + h - 34, nw, 24, 4, C_RAISED);
+    TextMid(c, F_SMALL, CX0 + (g_cw - SIDE_W - PANEL_W - 2 * PAD) - nw - 2, y + h - 22, note, C_MUTED);
+  }
+
+  // The picked event in full, and the report button.
+  I64 dy = y + h + 16;
+  Entry *e = NULL;
+  Event ev;
+  if (a->selected >= 0 && a->selected < log->count) {
+    e = &log->entries[a->selected];
+    if (e->kind != KIND_EVENT || !EventFromBody(e->body, &ev))
+      e = NULL;
+  }
+  if (e == NULL) {
+    Card(a, CX0, dy, (g_cw - SIDE_W - PANEL_W - 2 * PAD), detail_h);
+    Text(c, F_SEMI, CX0 + 20, dy + 22, "Pick an event", C_TEXT);
+    Text(c, F_BODY, CX0 + 20, dy + 48, "Click a row to see the whole command, why it was flagged, and to report it to the manager.", C_MUTED, (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 40);
+    Text(c, F_SMALL, CX0 + 20, dy + 76, "SUSPICIOUS: matches a known attack step. WATCH: normal on its own, worth a look in a pattern.", C_FAINT, (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 40);
+    return;
+  }
+  I64 risk = a->risk[a->selected];
+  U32 edge = C_LINE2;
+  if (risk == RISK_SUS)
+    edge = C_RED;
+  else if (risk == RISK_WATCH)
+    edge = C_AMBER;
+  Box(c, CX0, dy, (g_cw - SIDE_W - PANEL_W - 2 * PAD), detail_h, 8, C_SURFACE, edge);
+  U8 head[200], when[32], station[NAME_MAX];
+  DateText(e->time, when);
+  NameOf(log, e->author, station);
+  if (StrCmp(ev.user, "-") == 0)
+    snprintf(head, 200, "%s to %s", g_ev_label[ev.source], ev.host);
+  else
+    snprintf(head, 200, "%s on %s, %s", ev.user, ev.host, g_ev_label[ev.source]);
+  Text(c, F_H2, CX0 + 20, dy + 16, head, C_TEXT, (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 260);
+  U8 meta[160];
+  snprintf(meta, 160, "%s. Seen by %s's station, signed.", when, station);
+  Text(c, F_SMALL, CX0 + 20, dy + 40, meta, C_FAINT, (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 260);
+  I64 starts[2], lens[2];
+  I64 n = Wrap(c, F_MONO, ev.detail, (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 40, starts, lens, 2);
+  Round(c, CX0 + 16, dy + 62, (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 32, 16 + n * 18, 6, C_BG);
+  for (I64 i = 0; i < n; i++)
+    Text(c, F_MONO, CX0 + 26, dy + 70 + i * 18, ev.detail + starts[i], C_TEXT, (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 52, lens[i]);
+  U8 why[160];
+  if (risk == RISK_NONE)
+    StrCpy(why, "Nothing about this matches the attack patterns ARK knows.");
+  else
+    snprintf(why, 160, "Flagged because it %s.", a->why[a->selected]);
+  U32 wcol = C_MUTED;
+  if (risk == RISK_SUS)
+    wcol = C_RED_FG;
+  else if (risk == RISK_WATCH)
+    wcol = C_AMBER_FG;
+  Text(c, F_SEMI, CX0 + 20, dy + detail_h - 30, why, wcol, (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 260);
+
+  Entry *rep = ReportOf(a, e);
+  I64 bx = CX0 + (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 216, bw = 196;
+  if (rep != NULL) {
+    U8 by[NAME_MAX], line[96], t[8];
+    NameOf(log, rep->author, by);
+    ClockText(rep->time, t);
+    snprintf(line, 96, "Reported by %s at %s", by, t);
+    TextRight(c, F_SEMI, CX0 + (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 20, dy + 22, line, C_PURPLE_FG);
+  } else if (IsAdmin(a->st)) {
+    TextRight(c, F_SMALL, CX0 + (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 20, dy + 22, "Your team reports events to you.", C_FAINT);
+  } else {
+    Button(a, bx, dy + 14, bw, 36, "Report to manager", BTN_RED, H_REPORT, a->selected);
+  }
+}
+
 U0 DrawScopeForm(App *a, I64 y)
 {
   Canvas *c = a->cv;
-  I64 x = CX0, w = CXW;
+  I64 x = CX0, w = (g_cw - SIDE_W - PANEL_W - 2 * PAD);
   Box(c, x, y, w, 452, 8, C_SURFACE, C_CYAN);
   TextMid(c, F_H2, x + 20, y + 24, "Add an affected system or dataset", C_TEXT);
   TextMid(c, F_SMALL, x + w - 20 - TextWidth(c, F_SMALL, "Tab moves between fields. Esc cancels."), y + 24, "Tab moves between fields. Esc cancels.", C_FAINT);
@@ -1528,25 +1867,25 @@ U0 DrawScopePage(App *a)
   Canvas *c = a->cv;
   PageHead(a, "Scope", "Systems that were hit and their latest status. Each change is a new log entry.");
   if (!a->scope_open)
-    Button(a, CX0 + CXW - 190, TOP_H + 22, 190, 36, "Add affected system", BTN_PRIMARY, H_SCOPE_OPEN);
+    Button(a, CX0 + (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 190, TOP_H + 22, 190, 36, "Add affected system", BTN_PRIMARY, H_SCOPE_OPEN);
   I64 y = TOP_H + 84;
   if (a->scope_open) {
     DrawScopeForm(a, y);
     y += 468;
   }
   CollectAssets(a);
-  I64 h = CH - 20 - y;
-  Card(a, CX0, y, CXW, h);
+  I64 h = g_ch - 20 - y;
+  Card(a, CX0, y, (g_cw - SIDE_W - PANEL_W - 2 * PAD), h);
   I64 cols[6] = {16, 236, 336, 446, 556, 716};
   U8 *heads[6] = {"System", "Data", "Residents", "Records", "Status", "Updated"};
   for (I64 i = 0; i < 6; i++)
     TextMid(c, F_LABEL, CX0 + cols[i], y + 20, heads[i], C_FAINT);
-  HLine(c, CX0 + 1, y + 40, CXW - 2, C_LINE);
+  HLine(c, CX0 + 1, y + 40, (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 2, C_LINE);
   if (a->asset_count == 0) {
     Text(c, F_BODY, CX0 + 16, y + 58, "No affected systems yet. Use Add affected system for each one you find.", C_FAINT);
     return;
   }
-  Clip(c, CX0 + 1, y + 41, CXW - 2, h - 42);
+  Clip(c, CX0 + 1, y + 41, (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 2, h - 42);
   I64 ry = y + 41;
   for (I64 i = 0; i < a->asset_count; i++) {
     Asset *as = &a->assets[i];
@@ -1568,8 +1907,8 @@ U0 DrawScopePage(App *a)
     DateText(as->time, when);
     NameOf(a->st->log, as->author, name);
     snprintf(line, 64, "%s, %s", when, name);
-    TextMid(c, F_SMALL, CX0 + cols[5], cy, line, C_MUTED, CXW - cols[5] - 16);
-    HLine(c, CX0 + 1, ry + 43, CXW - 2, C_ROWLINE);
+    TextMid(c, F_SMALL, CX0 + cols[5], cy, line, C_MUTED, (g_cw - SIDE_W - PANEL_W - 2 * PAD) - cols[5] - 16);
+    HLine(c, CX0 + 1, ry + 43, (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 2, C_ROWLINE);
     ry += 44;
   }
   ClipAll(c);
@@ -1591,10 +1930,10 @@ U0 DrawClocksPage(App *a)
   I64 y = TOP_H + 84;
 
   I64 h = 43 + MaxI64(1, n) * 64 + 8;
-  Card(a, CX0, y, CXW, h);
-  I64 ry = CardHead(a, CX0, y, CXW, "Running", "A reminder for counsel, not legal advice");
+  Card(a, CX0, y, (g_cw - SIDE_W - PANEL_W - 2 * PAD), h);
+  I64 ry = CardHead(a, CX0, y, (g_cw - SIDE_W - PANEL_W - 2 * PAD), "Running", "A reminder for counsel, not legal advice");
   if (n == 0) {
-    Text(c, F_BODY, CX0 + 16, ry + 14, "None running. Marking a system Exfiltrated or Encrypted on the Scope page starts the matching clocks.", C_MUTED, CXW - 32);
+    Text(c, F_BODY, CX0 + 16, ry + 14, "None running. Marking a system Exfiltrated or Encrypted on the Scope page starts the matching clocks.", C_MUTED, (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 32);
     Text(c, F_SMALL, CX0 + 16, ry + 36, "Suspected, Contained and Clean never start a clock.", C_FAINT);
   }
   I64 now = time(NULL);
@@ -1616,13 +1955,13 @@ U0 DrawClocksPage(App *a)
     Text(c, F_BODY, CX0 + 640, ry + 14, dueline, C_TEXT);
     Text(c, F_SMALL, CX0 + 640, ry + 36, startline, C_FAINT);
     if (i < n - 1)
-      HLine(c, CX0 + 1, ry + 63, CXW - 2, C_ROWLINE);
+      HLine(c, CX0 + 1, ry + 63, (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 2, C_ROWLINE);
     ry += 64;
   }
 
   y += h + 16;
-  Card(a, CX0, y, CXW, 43 + RULES * 44 + 8);
-  ry = CardHead(a, CX0, y, CXW, "Every rule ARK tracks");
+  Card(a, CX0, y, (g_cw - SIDE_W - PANEL_W - 2 * PAD), 43 + RULES * 44 + 8);
+  ry = CardHead(a, CX0, y, (g_cw - SIDE_W - PANEL_W - 2 * PAD), "Every rule ARK tracks");
   for (I64 r = 0; r < RULES; r++) {
     I64 cy = ry + 22;
     TextMid(c, F_SEMI, CX0 + 16, cy, g_rule_who[r], C_TEXT, 220);
@@ -1635,9 +1974,9 @@ U0 DrawClocksPage(App *a)
       state = "RUNNING";
       scol = C_AMBER;
     }
-    Badge(a, CX0 + CXW - 16 - 14 - TextWidth(c, F_LABEL, state), cy, state, scol);
+    Badge(a, CX0 + (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 16 - 14 - TextWidth(c, F_LABEL, state), cy, state, scol);
     if (r < RULES - 1)
-      HLine(c, CX0 + 1, ry + 43, CXW - 2, C_ROWLINE);
+      HLine(c, CX0 + 1, ry + 43, (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 2, C_ROWLINE);
     ry += 44;
   }
 }
@@ -1663,7 +2002,7 @@ U0 DrawTeamPage(App *a)
   PageHead(a, "Team", "Everyone admitted to this incident. Only the manager can admit people.");
   I64 y = TOP_H + 84;
   if (a->team.join_pending && IsAdmin(a->st)) {
-    Box(c, CX0, y, CXW, 150, 8, Mix(C_CYAN, C_SURFACE, 20), C_CYAN);
+    Box(c, CX0, y, (g_cw - SIDE_W - PANEL_W - 2 * PAD), 150, 8, Mix(C_CYAN, C_SURFACE, 20), C_CYAN);
     U8 line[96];
     snprintf(line, 96, "%s asks to join", a->team.join_name);
     Text(c, F_H2, CX0 + 20, y + 18, line, C_TEXT);
@@ -1671,12 +2010,12 @@ U0 DrawTeamPage(App *a)
     BigCode(a, CX0 + 20, y + 70, JoinCode(a->team.join_pk), C_CYAN_FG);
     Text(c, F_BODY, CX0 + 300, y + 76, "Approve only if it matches exactly.", C_TEXT);
     Text(c, F_SMALL, CX0 + 300, y + 98, "A different code means a different device is asking. Don't approve it.", C_MUTED);
-    Button(a, CX0 + CXW - 20 - 150, y + 20, 150, 40, "Approve", BTN_GREEN, H_APPROVE);
+    Button(a, CX0 + (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 20 - 150, y + 20, 150, 40, "Approve", BTN_GREEN, H_APPROVE);
     y += 166;
   }
   CollectMembers(a);
   I64 h = 43 + MaxI64(1, a->member_count) * 48 + 8;
-  Card(a, CX0, y, CXW, h);
+  Card(a, CX0, y, (g_cw - SIDE_W - PANEL_W - 2 * PAD), h);
   I64 online = 0;
   for (I64 i = 0; i < a->member_count; i++)
     if (PeerOnline(a, a->members[i].pk))
@@ -1686,7 +2025,7 @@ U0 DrawTeamPage(App *a)
     snprintf(note, 48, "1 member, %ld online", online);
   else
     snprintf(note, 48, "%ld members, %ld online", a->member_count, online);
-  I64 ry = CardHead(a, CX0, y, CXW, "Members", note);
+  I64 ry = CardHead(a, CX0, y, (g_cw - SIDE_W - PANEL_W - 2 * PAD), "Members", note);
   for (I64 i = 0; i < a->member_count; i++) {
     Member *m = &a->members[i];
     I64 cy = ry + 24;
@@ -1712,20 +2051,20 @@ U0 DrawTeamPage(App *a)
     Fingerprint(m->pk, fp);
     TextMid(c, F_MONO, CX0 + 560, cy, fp, C_FAINT);
     if (on)
-      TextMid(c, F_SMALL, CX0 + CXW - 16 - TextWidth(c, F_SMALL, "online"), cy, "online", C_GREEN_FG);
+      TextMid(c, F_SMALL, CX0 + (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 16 - TextWidth(c, F_SMALL, "online"), cy, "online", C_GREEN_FG);
     else
-      TextMid(c, F_SMALL, CX0 + CXW - 16 - TextWidth(c, F_SMALL, "not heard"), cy, "not heard", C_FAINT);
+      TextMid(c, F_SMALL, CX0 + (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 16 - TextWidth(c, F_SMALL, "not heard"), cy, "not heard", C_FAINT);
     if (i < a->member_count - 1)
-      HLine(c, CX0 + 1, ry + 47, CXW - 2, C_ROWLINE);
+      HLine(c, CX0 + 1, ry + 47, (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 2, C_ROWLINE);
     ry += 48;
   }
 
   y += h + 16;
-  Card(a, CX0, y, CXW, 150);
-  ry = CardHead(a, CX0, y, CXW, "Adding someone");
-  Text(c, F_BODY, CX0 + 16, ry + 14, "1.  They start ARK on a clean laptop, pick a name and passphrase, then choose Join.", C_TEXT, CXW - 32);
-  Text(c, F_BODY, CX0 + 16, ry + 38, "2.  A request appears here and the panel beeps. They read their six-digit code out loud.", C_TEXT, CXW - 32);
-  Text(c, F_BODY, CX0 + 16, ry + 62, "3.  If it matches, the manager presses Approve. They get the team key and the whole log.", C_TEXT, CXW - 32);
+  Card(a, CX0, y, (g_cw - SIDE_W - PANEL_W - 2 * PAD), 150);
+  ry = CardHead(a, CX0, y, (g_cw - SIDE_W - PANEL_W - 2 * PAD), "Adding someone");
+  Text(c, F_BODY, CX0 + 16, ry + 14, "1.  They start ARK on a clean laptop, pick a name and passphrase, then choose Join.", C_TEXT, (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 32);
+  Text(c, F_BODY, CX0 + 16, ry + 38, "2.  A request appears here and the panel beeps. They read their six-digit code out loud.", C_TEXT, (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 32);
+  Text(c, F_BODY, CX0 + 16, ry + 62, "3.  If it matches, the manager presses Approve. They get the team key and the whole log.", C_TEXT, (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 32);
 }
 
 U0 DrawNetworkPage(App *a)
@@ -1744,9 +2083,9 @@ U0 DrawNetworkPage(App *a)
     if (cut)
       col = C_RED;
     snprintf(head, 128, "%s: %s", when, name);
-    Box(c, CX0, y, CXW, 60, 8, Mix(col, C_BG, 30), col);
+    Box(c, CX0, y, (g_cw - SIDE_W - PANEL_W - 2 * PAD), 60, 8, Mix(col, C_BG, 30), col);
     Text(c, F_SEMI, CX0 + 16, y + 12, head, LightOf(col));
-    Text(c, F_SMALL, CX0 + 16, y + 34, net->body, LightOf(col), CXW - 32);
+    Text(c, F_SMALL, CX0 + 16, y + 34, net->body, LightOf(col), (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 32);
     y += 76;
   }
   if (a->link.fd < 0 || online == 0) {
@@ -1756,13 +2095,13 @@ U0 DrawNetworkPage(App *a)
       col = C_RED;
       head = "This station has no relay port";
     }
-    Box(c, CX0, y, CXW, 60, 8, Mix(col, C_BG, 30), col);
+    Box(c, CX0, y, (g_cw - SIDE_W - PANEL_W - 2 * PAD), 60, 8, Mix(col, C_BG, 30), col);
     Text(c, F_SEMI, CX0 + 16, y + 12, head, LightOf(col));
-    Text(c, F_SMALL, CX0 + 16, y + 34, "Keep working. Entries are signed and saved here, and other stations fetch them once the link is back.", LightOf(col), CXW - 32);
+    Text(c, F_SMALL, CX0 + 16, y + 34, "Keep working. Entries are signed and saved here, and other stations fetch them once the link is back.", LightOf(col), (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 32);
     y += 76;
   }
 
-  Card(a, CX0, y, CXW, 172);
+  Card(a, CX0, y, (g_cw - SIDE_W - PANEL_W - 2 * PAD), 172);
   I64 bw = 220, by = y + 28, bh = 116;
   // This station.
   Box(c, CX0 + 24, by, bw, bh, 10, C_BG, C_LINE2);
@@ -1773,14 +2112,14 @@ U0 DrawNetworkPage(App *a)
   snprintf(count, 32, "%ld ENTRIES", a->st->log->count);
   Badge(a, CX0 + 40, by + 92, count, C_GREEN);
   // Relay.
-  I64 rx = CX0 + (CXW - 240) / 2;
+  I64 rx = CX0 + ((g_cw - SIDE_W - PANEL_W - 2 * PAD) - 240) / 2;
   Box(c, rx, by, 240, bh, 10, C_BG, C_PURPLE);
   Text(c, F_H2, rx + (240 - TextWidth(c, F_H2, "Untrusted relay")) / 2, by + 16, "Untrusted relay", C_TEXT);
   Text(c, F_SMALL, rx + (240 - TextWidth(c, F_SMALL, "Arduino UNO Q, own Wi-Fi")) / 2, by + 40, "Arduino UNO Q, own Wi-Fi", C_MUTED);
   I64 bx = rx + (240 - TextWidth(c, F_LABEL, "SEES ONLY CIPHERTEXT") - 14) / 2;
   Badge(a, bx, by + 78, "SEES ONLY CIPHERTEXT", C_PURPLE);
   // Other stations.
-  I64 ox = CX0 + CXW - 24 - bw;
+  I64 ox = CX0 + (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 24 - bw;
   Box(c, ox, by, bw, bh, 10, C_BG, C_LINE2);
   Text(c, F_H2, ox + 16, by + 16, "Other stations", C_TEXT);
   I64 py = by + 46, shown = 0;
@@ -1817,7 +2156,7 @@ U0 DrawNetworkPage(App *a)
   TextMid(c, F_SMALL, cx + (cw - TextWidth(c, F_SMALL, t2)) / 2, by + bh / 2 - 14, t2, LightOf(l2));
 
   y += 188;
-  I64 hw = (CXW - 16) / 2;
+  I64 hw = ((g_cw - SIDE_W - PANEL_W - 2 * PAD) - 16) / 2;
   Card(a, CX0, y, hw, 132);
   I64 ry = CardHead(a, CX0, y, hw, "What the relay can see");
   Text(c, F_BODY, CX0 + 16, ry + 14, "Sealed envelopes, their size and when they", C_MUTED);
@@ -1830,28 +2169,28 @@ U0 DrawNetworkPage(App *a)
   Text(c, F_BODY, CX0 + hw + 32, ry + 56, "an entry without the other stations noticing.", C_MUTED);
 
   y += 148;
-  Card(a, CX0, y, CXW, 43 + 4 * 40 + 8);
-  ry = CardHead(a, CX0, y, CXW, "Checks on this station");
+  Card(a, CX0, y, (g_cw - SIDE_W - PANEL_W - 2 * PAD), 43 + 4 * 40 + 8);
+  ry = CardHead(a, CX0, y, (g_cw - SIDE_W - PANEL_W - 2 * PAD), "Checks on this station");
   U8 line[96];
   snprintf(line, 96, "%ld", a->st->rejected);
   TextMid(c, F_BODY, CX0 + 16, ry + 20, "Messages rejected (failed the seal or signature check)", C_MUTED);
-  TextMid(c, F_SEMI, CX0 + CXW - 16 - TextWidth(c, F_SEMI, line), ry + 20, line, C_TEXT);
+  TextMid(c, F_SEMI, CX0 + (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 16 - TextWidth(c, F_SEMI, line), ry + 20, line, C_TEXT);
   snprintf(line, 96, "%ld", a->st->log->problems);
   TextMid(c, F_BODY, CX0 + 16, ry + 60, "Entries with a broken chain, unknown author or fork", C_MUTED);
-  TextMid(c, F_SEMI, CX0 + CXW - 16 - TextWidth(c, F_SEMI, line), ry + 60, line, C_TEXT);
+  TextMid(c, F_SEMI, CX0 + (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 16 - TextWidth(c, F_SEMI, line), ry + 60, line, C_TEXT);
   if (IsCut(a))
     StrCpy(line, "cut");
   else
     StrCpy(line, "on");
   TextMid(c, F_BODY, CX0 + 16, ry + 100, "Internet on this machine (the relay link doesn't use it)", C_MUTED);
-  TextMid(c, F_SEMI, CX0 + CXW - 16 - TextWidth(c, F_SEMI, line), ry + 100, line, C_TEXT);
+  TextMid(c, F_SEMI, CX0 + (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 16 - TextWidth(c, F_SEMI, line), ry + 100, line, C_TEXT);
   ry += 40;
   if (a->panel_fd >= 0)
     snprintf(line, 96, "connected on %s", a->panel_port);
   else
     StrCpy(line, "not connected");
   TextMid(c, F_BODY, CX0 + 16, ry + 100, "Hardware panel", C_MUTED);
-  TextMid(c, F_SEMI, CX0 + CXW - 16 - TextWidth(c, F_SEMI, line), ry + 100, line, C_TEXT);
+  TextMid(c, F_SEMI, CX0 + (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 16 - TextWidth(c, F_SEMI, line), ry + 100, line, C_TEXT);
 }
 
 U0 GuideBlock(App *a, I64 x, I64 *y, I64 w, U8 *head, U8 **lines)
@@ -1877,7 +2216,7 @@ U8 *g_guide_write[] = {
   "Chat: talk to the team. Kept in the log too.",
   "Alert: tell the manager something is wrong. Buzzes.",
   "Scope: a system that was hit and what happened to it.",
-  "Type anywhere on Overview or Log to start a note.", NULL
+  "Type anywhere on Overview or Chat log to start a note.", NULL
 };
 U8 *g_guide_phases[] = {
   "DETECT     confirm what happened and how far it goes",
@@ -1892,9 +2231,16 @@ U8 *g_guide_badges[] = {
   "FORKED        one author signed two versions of it",
   "Rejected      messages that failed the seal check", NULL
 };
+U8 *g_guide_server[] = {
+  "Every command typed on the watched server, sudo,",
+  "logins and failed logins, and who did it. Rows that",
+  "match an attack step are SUSPICIOUS. Click one and",
+  "press Report to manager: their panel buzzes.", NULL
+};
 U8 *g_guide_keys[] = {
   "F1 guide    F2 note    F3 chat    F5 alert",
-  "F4 add affected system      Ctrl+F search",
+  "F4 add affected system    F6 server log",
+  "Ctrl+F search the page you're on",
   "F9 approve a join      F12 twice: lock station",
   "PgUp, PgDn or the wheel scroll the log.", NULL
 };
@@ -1909,12 +2255,13 @@ U8 *g_guide_panel[] = {
 U0 DrawGuidePage(App *a)
 {
   PageHead(a, "Guide", "What everything on this screen means.");
-  I64 hw = (CXW - 16) / 2;
+  I64 hw = ((g_cw - SIDE_W - PANEL_W - 2 * PAD) - 16) / 2;
   I64 y = TOP_H + 84;
-  Card(a, CX0, y, hw, CH - 20 - y);
-  Card(a, CX0 + hw + 16, y, hw, CH - 20 - y);
+  Card(a, CX0, y, hw, g_ch - 20 - y);
+  Card(a, CX0 + hw + 16, y, hw, g_ch - 20 - y);
   I64 ly = y + 24, ry = y + 24;
   GuideBlock(a, CX0 + 20, &ly, hw - 40, "What ARK is", g_guide_what);
+  GuideBlock(a, CX0 + 20, &ly, hw - 40, "Server log", g_guide_server);
   GuideBlock(a, CX0 + 20, &ly, hw - 40, "Writing", g_guide_write);
   GuideBlock(a, CX0 + 20, &ly, hw - 40, "Phases", g_guide_phases);
   GuideBlock(a, CX0 + hw + 36, &ry, hw - 40, "Warning badges", g_guide_badges);
@@ -1929,8 +2276,8 @@ U8 *g_steps[4] = {"Your name", "Passphrase", "Start or join", "Incident title"};
 U0 DrawSetup(App *a)
 {
   Canvas *c = a->cv;
-  Fill(c, 0, 0, 520, CH, C_PANEL);
-  Fill(c, 519, 0, 1, CH, C_LINE);
+  Fill(c, 0, 0, 520, g_ch, C_PANEL);
+  Fill(c, 519, 0, 1, g_ch, C_LINE);
   Text(c, F_BIG, 56, 72, "ARK", C_TEXT);
   Text(c, F_H2, 56, 132, "An incident logbook that stays", C_MUTED);
   Text(c, F_H2, 56, 154, "off the company network.", C_MUTED);
@@ -2049,12 +2396,15 @@ U0 Draw(App *a)
   Canvas *c = a->cv;
   ClipAll(c);
   a->hit_count = 0;
-  Fill(c, 0, 0, CW, CH, C_BG);
+  Fill(c, 0, 0, g_cw, g_ch, C_BG);
   if (!Ready(a)) {
     DrawSetup(a);
   } else {
+    RefreshRisk(a);
     if (a->view == V_OVERVIEW)
       DrawOverview(a);
+    else if (a->view == V_SERVER)
+      DrawServerPage(a);
     else if (a->view == V_LOG)
       DrawLogPage(a);
     else if (a->view == V_SCOPE)
@@ -2157,6 +2507,104 @@ U0 Approve(App *a)
   U8 line[96];
   snprintf(line, 96, "%s admitted. They now get the key and the whole log.", name);
   Say(a, line, C_GREEN_FG);
+}
+
+
+// Sends the manager an alert that names the event, so every station can
+// show it as reported. The panel buzzes on the manager's station.
+U0 ReportEvent(App *a, I64 idx)
+{
+  Log *log = a->st->log;
+  if (idx < 0 || idx >= log->count)
+    return;
+  Entry *e = &log->entries[idx];
+  Event ev;
+  if (e->kind != KIND_EVENT || !EventFromBody(e->body, &ev) || ReportOf(a, e) != NULL)
+    return;
+  U8 ref[12], t[8], body[BODY_MAX];
+  EntryRef(e, ref);
+  ClockText(e->time, t);
+  RefreshRisk(a);
+  U8 *why = a->why[idx];
+  if (why[0])
+    snprintf(body, BODY_MAX, "[%s] %s on %s at %s: %s (it %s)", ref, ev.user, ev.host, t, ev.detail, why);
+  else
+    snprintf(body, BODY_MAX, "[%s] %s on %s at %s: %s", ref, ev.user, ev.host, t, ev.detail);
+  if (PostAndSend(a, KIND_ALERT, IncidentPhase(a), body, StrLen(body)))
+    Say(a, "Reported to the manager. Their panel buzzes.", C_RED_FG);
+}
+
+#define FEED_RATE   30   // events per window; more than that is summarised
+#define FEED_WINDOW 10
+
+U0 FeedEvent(App *a, U8 *line, I64 len)
+{
+  Event ev;
+  if (!FeedLine(line, len, &ev))
+    return;
+  I64 now = time(NULL);
+  if (now - a->feed_window >= FEED_WINDOW) {
+    if (a->feed_dropped > 0) {
+      U8 note[160];
+      snprintf(note, 160, "request|ark-watch|-|%ld more events in %ld seconds were not logged (rate limit)",
+               a->feed_dropped, FEED_WINDOW);
+      PostAndSend(a, KIND_EVENT, IncidentPhase(a), note, StrLen(note));
+    }
+    a->feed_window = now;
+    a->feed_posted = 0;
+    a->feed_dropped = 0;
+  }
+  if (a->feed_posted >= FEED_RATE) {
+    a->feed_dropped++;
+    return;
+  }
+  U8 body[BODY_MAX];
+  I64 n = EventBody(&ev, body);
+  if (PostAndSend(a, KIND_EVENT, IncidentPhase(a), body, n))
+    a->feed_posted++;
+  a->dirty = TRUE;
+}
+
+// Reads lines tools/ark-watch appended to DIR/feed since the last call.
+// Lines already in the file when the station started aren't logged again.
+U0 PollFeed(App *a)
+{
+  if (!Ready(a) || a->st->epoch < 0)
+    return;
+  if (a->feed_fd < 0) {
+    I64 now = time(NULL);
+    if (now - a->feed_tried < 2)
+      return;
+    a->feed_tried = now;
+    U8 *path = StationPath(a->st, "feed");
+    a->feed_fd = open(path, O_RDONLY | O_NONBLOCK);
+    Free(path);
+    a->feed_off = 0;
+    if (a->feed_fd < 0)
+      return;
+  }
+  I64 size = lseek(a->feed_fd, 0, SEEK_END);
+  if (size < a->feed_off) {
+    a->feed_off = 0;
+    a->feed_len = 0;
+  }
+  if (size == a->feed_off)
+    return;
+  lseek(a->feed_fd, a->feed_off, SEEK_SET);
+  U8 buf[4096];
+  I64 n = read(a->feed_fd, buf, 4096);
+  if (n <= 0)
+    return;
+  a->feed_off += n;
+  for (I64 i = 0; i < n; i++) {
+    if (buf[i] == '\n') {
+      a->feed_line[a->feed_len] = 0;
+      FeedEvent(a, a->feed_line, a->feed_len);
+      a->feed_len = 0;
+    } else if (a->feed_len < 1099) {
+      a->feed_line[a->feed_len++] = buf[i];
+    }
+  }
 }
 
 U0 SetPhase(App *a, I64 p)
@@ -2324,6 +2772,7 @@ U0 Act(App *a, I64 id, I64 arg)
   if (id == H_NAV) {
     a->view = arg;
     a->scroll = 0;
+    a->server_scroll = 0;
   } else if (id == H_FOCUS) {
     a->focus = arg;
   } else if (id == H_PHASE) {
@@ -2373,6 +2822,13 @@ U0 Act(App *a, I64 id, I64 arg)
     SubmitSetup(a);
   } else if (id == H_SEARCH_CLR) {
     ClearField(a, FLD_SEARCH);
+  } else if (id == H_EVENT) {
+    a->selected = arg;
+  } else if (id == H_REPORT) {
+    ReportEvent(a, arg);
+  } else if (id == H_SFILTER) {
+    a->server_filter = arg;
+    a->server_scroll = 0;
   }
 }
 
@@ -2428,8 +2884,10 @@ U0 OnText(App *a, U8 *text)
       f->text[f->len++] = text[i];
   f->text[f->len] = 0;
   if (a->focus == FLD_SEARCH) {
-    a->view = V_LOG;
+    if (a->view != V_SERVER)
+      a->view = V_LOG;
     a->scroll = 0;
+    a->server_scroll = 0;
   }
 }
 
@@ -2492,8 +2950,14 @@ U0 OnKey(App *a, I64 sym, I64 mod)
     a->view = V_LOG;
     a->kind = KIND_ALERT;
     a->focus = FLD_COMPOSE;
+  } else if (sym == KEY_F6) {
+    a->view = V_SERVER;
   } else if (sym == KEY_F9) {
     Approve(a);
+  } else if (a->view == V_SERVER && sym == KEY_PAGEUP) {
+    a->server_scroll = MaxI64(0, a->server_scroll - 10);
+  } else if (a->view == V_SERVER && sym == KEY_PAGEDOWN) {
+    a->server_scroll = MinI64(a->server_scroll + 10, MaxI64(0, EventCount(a) - 1));
   } else if (sym == KEY_PAGEUP) {
     a->view = V_LOG;
     a->scroll += 5;
@@ -2504,6 +2968,10 @@ U0 OnKey(App *a, I64 sym, I64 mod)
 
 U0 OnWheel(App *a, I64 dy)
 {
+  if (Ready(a) && a->view == V_SERVER) {
+    a->server_scroll = MaxI64(0, MinI64(a->server_scroll - dy * 3, MaxI64(0, EventCount(a) - 1)));
+    return;
+  }
   if (!Ready(a) || a->view != V_LOG)
     return;
   a->scroll = MaxI64(0, MinI64(a->scroll + dy * 2, MaxI64(0, a->st->log->count - 1)));
@@ -2614,7 +3082,13 @@ App *AppNew(U8 *dir, U8 *port, U8 *panel)
   a->kind = KIND_NOTE;
   a->focus = FLD_SETUP;
   a->panel_fd = -1;
+  a->selected = -1;
   a->dirty = TRUE;
+  U8 *feed = StationPath(a->st, "feed");
+  a->feed_fd = open(feed, O_RDONLY | O_NONBLOCK);
+  if (a->feed_fd >= 0)
+    a->feed_off = lseek(a->feed_fd, 0, SEEK_END);
+  Free(feed);
   if (!LinkOpen(&a->link, port))
     a->link.fd = -1;
   if (panel != NULL) {

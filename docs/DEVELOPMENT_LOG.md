@@ -86,3 +86,15 @@ Not yet checked: the real `nmcli` cut with station A on USB, and the new firmwar
 The UNO Q's matrix showed Arduino's factory animation. It now plays an ARK animation, installed as a UNO Q App set as the boot default (`firmware/relay-matrix`). Frames are drawn by a Python script and checked as a GIF before flashing. The first preview had the cabin two columns off-center under the mast.
 
 `arduino-app-cli` failed under `adb shell` with `Stat /Data/Local/Tmp`: adb exports Android's `TMPDIR`. Setting `TMPDIR=/tmp` fixed it. The relay hub had stopped after a reboot of the board and was started again by hand; it doesn't start at boot yet.
+
+## 2026-11-07 late, server log and a sharp window
+
+The incident log was a group chat. It is now two pages: Server log (commands, sudo, logins, failed logins, web requests, from `tools/ark-watch`) and Chat log. A worker picks a flagged event and presses Report to manager, which sends an alert naming it (decision 15).
+
+The window used to be a fixed 1440x900 buffer stretched to fit, which blurred text and couldn't resize. Drawing now happens at the window's real pixel size: layout stays in units, every primitive scales them, and glyphs are re-rendered at the new size.
+
+Two more hcc 0.0.15 crashes (segfault in the compiler, no message):
+- `I64 a = 1, b = 2;` at file scope.
+- A `#define` whose body names a variable or function, e.g. `#define CW g_cw`. Macros may only expand to literals and other macros.
+
+Both were found by bisecting the include list with a stub `Main`. A build that pipes hcc through `head` hides the crash, because the pipe's exit code is head's.

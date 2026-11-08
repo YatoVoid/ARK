@@ -7,6 +7,7 @@
 #include "crypto.HC"
 #include "link.HC"
 #include "log.HC"
+#include "events.HC"
 #include "station.HC"
 #include "team.HC"
 #include "deadlines.HC"
@@ -87,12 +88,17 @@ I32 Main(I32 argc, U8 **argv)
           OnWheel(a, *((ev + EV_WHEEL_Y)(I32 *)));
           a->dirty = TRUE;
         } else if (type == SDL_WINDOWEVENT) {
+          if (!CanvasResize(a->cv)) {
+            "could not resize the window: %s\n", SDL_GetError();
+            a->quit = TRUE;
+          }
           a->dirty = TRUE;
         }
       } while (SDL_PollEvent(ev));
     }
     PollLink(a);
     PollPanel(a);
+    PollFeed(a);
     PanelUpdate(a, FALSE);
     Heartbeat(a);
     I64 now = SDL_GetTicks();

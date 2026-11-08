@@ -22,10 +22,14 @@ Each station is one HolyC program that thinks it's talking to a serial port. soc
 | `src/log.HC` | entries, per-author hash chains, validity check, display order | built, tested |
 | `src/station.HC` | identity, team keys, passphrase-sealed secrets file, log file, posting and receiving | built, tested |
 | `src/main.HC` | arguments, font lookup, the event loop | built |
-| `src/app.HC` | the station window: setup screens, seven pages, control panel, input, actions, panel and link polling | built, tested (`test_ui`) |
-| `src/canvas.HC` | 1440x900 pixel buffer, rounded boxes, text from glyphs SDL2_ttf renders once, scaling to the window | built |
+| `src/app.HC` | the station window: setup screens, eight pages, control panel, input, actions, panel, feed and link polling | built, tested (`test_ui`) |
+| `src/events.HC` | server events: feed-line parsing, event bodies, the rules that flag suspicious commands | built, tested (`test_ui`) |
+| `src/canvas.HC` | a pixel buffer the size of the window, layout units scaled to pixels, rounded boxes, text from glyphs SDL2_ttf renders at the current scale | built |
 | `src/team.HC` | join requests, key grants, heads/sync, peer list | built, tested by hand |
 | `src/deadlines.HC` | breach-notification clocks | built, tested |
+| `tools/ark-watch` | follows the journal (and optionally a web access log) and appends events to a station's feed | tested (`test_watch.py`), run live |
+| `tools/hooks/ark-shell.*` | bash, zsh and fish hooks that log each typed command to the journal | tested by hand |
+| `tools/drill.sh` | a rehearsal intrusion for demos: logs attacker-style commands without running them | |
 | `firmware/panel/panel.ino` | Arduino UNO: red CUT and green RESTORE buttons, LEDs for internet on/cut, buzzer for alerts | compiles; earlier version tested on hardware |
 
 ## Link layer (built)
@@ -68,14 +72,14 @@ A flipped byte in `log` makes that record fail to decrypt, so it's counted as da
 
 ## Station window
 
-The window is one 1440x900 pixel buffer, scaled to fit with the aspect ratio kept. It is redrawn from scratch when something happens (input, a message, the panel) and once a second otherwise, so remaining times and who is online stay current.
+The layout is written in units for a window at least 1360x900 units. The pixel buffer matches the window's real size, and the scale is the largest that still fits those units, so text is rendered at the size it is shown instead of being stretched. A bigger window gives the main column more room. Fonts are re-rendered when the size changes. It is redrawn from scratch when something happens (input, a message, the panel) and once a second otherwise, so remaining times and who is online stay current.
 
 | Area | What it shows |
 |---|---|
 | Sidebar | incident title, day, phase; pages with counts (entries, systems, nearest deadline, pending join); your name and key fingerprint |
-| Top bar | log search, the four phases (clicking one logs the change for everyone), relay and log-integrity status |
+| Top bar | search for the page you're on, the four phases (clicking one logs the change for everyone), relay and log-integrity status |
 | Control panel | the same controls as the hardware panel: the newest alert with Acknowledge, CUT NETWORK, RESTORE NETWORK, status lights, and Lock station |
-| Pages | Overview, Incident log, Scope, Breach clocks, Team, Network, Guide |
+| Pages | Overview, Server log, Chat log, Scope, Breach clocks, Team, Network, Guide |
 
 Every frame records the clickable regions it drew. A click looks them up, newest first, so whatever was drawn on top wins. `tests/test_ui.HC` uses the same lookup to click through setup, posting, scope, search, approval and panic.
 
@@ -89,3 +93,19 @@ Two entry kinds carry them, so both are signed and in the record:
 | `KIND_NETWORK` (7) | "Cut ..." or "Restored ..." | written by the station that ran the switch; its newest one says whether that machine is cut |
 
 CUT runs `ARK_CUT_CMD` (default `nmcli networking off`); RESTORE runs `ARK_RESTORE_CMD` (default `nmcli networking on`) and only works on the manager's (admin's) station. A failed command is logged as a failure and doesn't change the state. The relay link survives the cut: station A reaches the UNO Q over USB (adb) and loopback to socat, which NetworkManager doesn't manage.
+
+## Server log
+
+```
+server: shell hook / sudo / sshd / su / useradd -> journald
+                                                     |
+tools/ark-watch (journalctl -f -o json) ---------> DIR/feed (one line per event)
+                                                     |
+station: PollFeed -> KIND_EVENT entry, signed -> relay -> every station
+```
+
+- **Feed lines** are `source TAB user TAB host TAB detail`. `FeedLine` keeps printable ASCII, turns `|` into `/`, caps the fields and drops lines with an unknown source. Lines already in the file when the station starts aren't logged again.
+- **Rate limit:** 30 events per 10 seconds. The rest are counted and logged as one entry, so a flood can't fill the log (2048 entries).
+- **Risk** is worked out by each station when it draws, from `g_rules` in `events.HC`: SUSPICIOUS for known attack steps (reading `/etc/shadow`, clearing history, uploading with curl, adding SSH keys, new users), WATCH for things that matter in a pattern (failed logins, plain downloads, sudo). Changing the rules doesn't touch the log.
+- **Reporting** posts a `KIND_ALERT` whose body starts with `[ref]`, the first 4 bytes of the event's hash. Every station matches it back to the event and shows it as REPORTED; the manager's panel buzzes as for any alert.
+- The chat log shows everything except server events.

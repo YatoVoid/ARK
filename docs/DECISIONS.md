@@ -103,3 +103,12 @@ The scenario the panel serves: an analyst reading logs suspects someone is in th
 - **On screen, CUT takes two presses within 3 seconds**, so a stray click can't drop the internet. The hardware button is one press, because it's an emergency control in the manager's hand.
 - **Commands are environment variables** (`ARK_CUT_CMD`, `ARK_RESTORE_CMD`) so a deployment can block a firewall zone or drop a VPN instead of turning NetworkManager off.
 - **Wiping keys moved to "Lock station"** (on screen, or F12 twice). Join approval is on the Team page and F9.
+
+## 15. A server log separate from the chat
+
+The log had become a group chat. What an analyst needs during an attack is the record of what happened on the server: which commands ran, as whom, from where.
+
+- **Events are log entries** (`KIND_EVENT`), signed by the station that watches the server. An attacker who gets onto the server can stop the watcher, but can't change what was already sent, and the gap shows.
+- **The journal is the source.** sudo, sshd and su already log there with the real user. Typed commands get there through a one-line shell hook calling `logger`. auditd would see more (every `execve`), but it isn't installed by default and needs root to set up.
+- **Flagging is a hint, not a verdict.** A worker reads the flagged rows and decides; Report to manager is one click and names the exact event. The manager's buzzer stays for things a person decided were worth it, otherwise a noisy server would keep it going all day.
+- **Risk is computed when drawn**, not stored, so the rules can improve without rewriting history.

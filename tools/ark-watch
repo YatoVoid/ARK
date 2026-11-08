@@ -1,0 +1,177 @@
+#!/usr/bin/env python3
+"""Watches this machine for commands, logins and requests and hands them to
+an ARK station, which signs each one into the Server log.
+
+    tools/ark-watch STATION_DIR [--access-log PATH] [--host NAME] [--print]
+
+Sources, all read from the systemd journal unless noted:
+  shell     commands typed in a shell with a hook from tools/hooks loaded
+  sudo      every sudo command, and wrong sudo passwords
+  login     SSH and su logins
+  fail      failed SSH, su and sudo passwords
+  account   useradd, usermod, groupadd, passwd, chpasswd
+  request   lines of an nginx/Apache access log (--access-log)
+
+Each event is one line appended to STATION_DIR/feed:
+  source TAB user TAB host TAB detail
+"""
+import argparse
+import json
+import os
+import pwd
+import re
+import select
+import socket
+import subprocess
+import sys
+
+IDENTIFIERS = ["ark-shell", "sudo", "sshd", "sshd-session", "su",
+               "useradd", "usermod", "groupadd", "passwd", "chpasswd"]
+FEED_MAX = 5 * 1024 * 1024
+DETAIL_MAX = 600
+
+SUDO_CMD = re.compile(r"^\s*(\S+) : .*COMMAND=(.*)$")
+SUDO_BAD = re.compile(r"^\s*(\S+) : \d+ incorrect password attempts?")
+PAM_FAIL = re.compile(r"pam_unix\((sudo|su|su-l|sshd):auth\): authentication failure;.*\buser=(\S+)")
+SSH_OK = re.compile(r"^Accepted \S+ for (\S+) from (\S+)")
+SSH_BAD = re.compile(r"^Failed \S+ for (?:invalid user )?(\S+) from (\S+)")
+SSH_INVALID = re.compile(r"^Invalid user (\S*) from (\S+)")
+SU_OK = re.compile(r"^\(to (\S+)\) (\S+) on")
+SU_BAD = re.compile(r"^FAILED SU \(to (\S+)\) (\S+) on")
+ACCESS = re.compile(r'^(\S+) \S+ (\S+) \[[^\]]*\] "(\S+) (\S+)[^"]*" (\d{3})')
+
+
+def clean(text, limit):
+    text = "".join(ch if 32 <= ord(ch) < 127 else " " for ch in str(text))
+    return text.strip()[:limit]
+
+
+def user_of(entry):
+    try:
+        return pwd.getpwuid(int(entry.get("_UID", ""))).pw_name
+    except (ValueError, KeyError):
+        return "?"
+
+
+def from_journal(entry):
+    """One journal entry as (source, user, detail), or None to skip it."""
+    ident = entry.get("SYSLOG_IDENTIFIER", "")
+    msg = entry.get("MESSAGE", "")
+    if isinstance(msg, list):  # journald sends non-UTF-8 messages as bytes
+        msg = bytes(msg).decode("utf-8", "replace")
+    if ident == "ark-shell":
+        return ("shell", user_of(entry), msg)
+    if ident == "sudo":
+        m = SUDO_BAD.match(msg)
+        if m:
+            return ("fail", m.group(1), "wrong sudo password")
+        m = SUDO_CMD.match(msg)
+        if m:
+            return ("sudo", m.group(1), m.group(2))
+    if ident in ("sshd", "sshd-session"):
+        m = SSH_OK.match(msg)
+        if m:
+            return ("login", m.group(1), "ssh from " + m.group(2))
+        m = SSH_BAD.match(msg) or SSH_INVALID.match(msg)
+        if m:
+            return ("fail", m.group(1) or "?", "ssh password from " + m.group(2))
+    if ident == "su":
+        m = SU_BAD.match(msg)
+        if m:
+            return ("fail", m.group(2), "su to " + m.group(1))
+        m = SU_OK.match(msg)
+        if m:
+            return ("login", m.group(2), "su to " + m.group(1))
+    m = PAM_FAIL.search(msg)
+    if m and ident not in ("sudo",):
+        return ("fail", m.group(2), m.group(1) + " password")
+    if ident in ("useradd", "usermod", "groupadd", "passwd", "chpasswd"):
+        return ("account", user_of(entry), ident + ": " + msg)
+    return None
+
+
+def from_access(line):
+    m = ACCESS.match(line)
+    if not m:
+        return None
+    ip, user, method, path, status = m.groups()
+    return ("request", user, "%s %s %s from %s" % (method, path, status, ip))
+
+
+class Feed:
+    def __init__(self, path, to_stdout):
+        self.path = path
+        self.to_stdout = to_stdout
+
+    def write(self, host, event):
+        source, user, detail = event
+        line = "\t".join([source, clean(user, 32) or "?", clean(host, 48),
+                          clean(detail, DETAIL_MAX)]) + "\n"
+        if self.to_stdout:
+            sys.stdout.write(line)
+            sys.stdout.flush()
+            return
+        try:
+            if os.path.getsize(self.path) > FEED_MAX:
+                # The station notices the file shrank and reads from the top.
+                open(self.path, "w").close()
+        except OSError:
+            pass
+        fd = os.open(self.path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        with os.fdopen(fd, "a") as f:
+            f.write(line)
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("station_dir")
+    ap.add_argument("--access-log", help="web server access log to follow")
+    ap.add_argument("--host", default=socket.gethostname(), help="name shown for this machine")
+    ap.add_argument("--print", action="store_true", help="print events instead of writing the feed")
+    args = ap.parse_args()
+
+    if not args.print and not os.path.isdir(args.station_dir):
+        sys.exit("no station directory at %s" % args.station_dir)
+    feed = Feed(os.path.join(args.station_dir, "feed"), args.print)
+
+    cmd = ["journalctl", "-f", "-n", "0", "-o", "json"]
+    for i, ident in enumerate(IDENTIFIERS):
+        if i:
+            cmd.append("+")
+        cmd.append("SYSLOG_IDENTIFIER=" + ident)
+    journal = subprocess.Popen(cmd, stdout=subprocess.PIPE, text=True, bufsize=1)
+    streams = [journal.stdout]
+    access = None
+    if args.access_log:
+        access = subprocess.Popen(["tail", "-F", "-n", "0", args.access_log],
+                                  stdout=subprocess.PIPE, text=True, bufsize=1)
+        streams.append(access.stdout)
+
+    print("watching %s; events go to %s" % (args.host, feed.path if not args.print else "stdout"),
+          file=sys.stderr)
+    try:
+        while True:
+            ready, _, _ = select.select(streams, [], [])
+            for s in ready:
+                line = s.readline()
+                if not line:
+                    sys.exit("%s stopped" % ("journalctl" if s is journal.stdout else "tail"))
+                if s is journal.stdout:
+                    try:
+                        event = from_journal(json.loads(line))
+                    except ValueError:
+                        continue
+                else:
+                    event = from_access(line)
+                if event:
+                    feed.write(args.host, event)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        journal.terminate()
+        if access:
+            access.terminate()
+
+
+if __name__ == "__main__":
+    main()

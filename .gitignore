@@ -2,3 +2,4 @@ build/
 *.ppm
 station-*/
 tools/vscode-holyc/*.vsix
+__pycache__/
