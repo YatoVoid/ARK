@@ -226,7 +226,26 @@ I32 Main(I32 argc, U8 **argv)
   a->team.join_pending = TRUE;
   MemCpy(a->team.join_pk, b->pk, PK_BYTES);
   StrCpy(a->team.join_name, "Marcus");
+  Check(Click(a, H_ROLE, 2), "a role can be picked before approving");
   Approve(a);
+  U8 role[NAME_MAX], who[NAME_MAX];
+  RoleOf(a->st->log, b->pk, role);
+  NameOf(a->st->log, b->pk, who);
+  Check(StrCmp(role, "Legal") == 0 && StrCmp(who, "Marcus") == 0, "the role is kept beside the name, not in it");
+  RoleOf(a->st->log, a->st->pk, role);
+  Check(StrCmp(role, "Incident lead") == 0, "the manager is the incident lead");
+
+  // Receipts come from a peer's heads: received only once it holds the entry.
+  Entry *mine = Newest(a);
+  Peer *pe = &a->team.peers[0];
+  pe->head_count = 1;
+  MemCpy(pe->heads, mine->author, PK_BYTES);
+  Put32(pe->heads + PK_BYTES, mine->seq - 1);
+  Check(!PeerHas(pe, mine->author, mine->seq), "a peer behind on my chain hasn't received my newest entry");
+  Put32(pe->heads + PK_BYTES, mine->seq);
+  Check(PeerHas(pe, mine->author, mine->seq), "a peer that reports my seq has received it");
+  Check(!PeerHas(pe, b->pk, 1), "nothing is received from an author the peer didn't list");
+  pe->head_count = 0;
   U8 *msg = MAlloc(MSG_MAX);
   for (I64 i = 0; i < a->st->log->count; i++)
     StationReceive(b, msg, MakeMessage(a->st, &a->st->log->entries[i], msg));
@@ -270,6 +289,16 @@ I32 Main(I32 argc, U8 **argv)
         "a login is flagged only at night");
   StrCpy(ev.user, "root");
   Check(EventRisk(&ev, 14, &why) == RISK_SUS, "a root login is suspicious");
+  StrCpy(ev.user, "m.ortiz");
+  StrCpy(ev.detail, "ssh from 203.0.113.47");
+  Check(EventRisk(&ev, 14, &why) == RISK_WATCH, "a daytime login from an outside address is worth watching");
+  StrCpy(ev.detail, "ssh from 172.20.1.9");
+  Check(EventRisk(&ev, 14, &why) == RISK_NONE, "a daytime login from 172.16/12 is not flagged");
+  ev.source = EV_SHELL;
+  StrCpy(ev.detail, "vssadmin delete shadows /all /quiet");
+  Check(EventRisk(&ev, 14, &why) == RISK_SUS, "deleting shadow copies is suspicious");
+  StrCpy(ev.detail, "rclone copy \\\\HR-DB\\Employees grayhound-drop:");
+  Check(EventRisk(&ev, 14, &why) == RISK_SUS, "rclone to a remote is suspicious");
 
   // The feed file turns into signed server events.
   I64 before_feed = a->st->log->count;
@@ -337,7 +366,7 @@ I32 Main(I32 argc, U8 **argv)
   Draw(a);
   Draw(m);
   Check(StrNCmp(a->title, "ARK  Manager: ", 14) == 0, "the manager's window title says Manager");
-  Check(StrNCmp(m->title, "ARK  Analyst: ", 14) == 0, "a member's window title says Analyst");
+  Check(StrNCmp(m->title, "ARK  Legal: Marcus", 18) == 0, "a member's window title says the role they were given");
   Check(Click(m, H_PHASE, PHASE_RECOVER), "a member can click a phase");
   Check(b->log->entries[b->log->count - 1].kind == KIND_ALERT &&
         RequestedPhase(b->log->entries[b->log->count - 1].body) == PHASE_RECOVER,

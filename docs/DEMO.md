@@ -146,15 +146,15 @@ cat /etc/shadow                               # fails without sudo, still logged
 or run the rehearsal, which logs attacker-style commands without running them:
 
 ```sh
-tools/drill.sh                                # DRILL_GAP=5 tools/drill.sh for slower steps
+tools/drill.sh                                # Enter per step; DRILL_GAP=5 for no prompts
 ```
 
 sudo commands, SSH and su logins and failed passwords are picked up from the journal without the hook. Add `--access-log /var/log/nginx/access.log` to `ark-watch` for web requests.
 
 ## The story, step by step
 
-1. **Run the drill.** Rows appear on both stations' Server log. SUSPICIOUS ones are red; the sidebar counts the ones nobody has reported.
-2. **On B,** filter to Suspicious and click `cat /etc/shadow`. The panel underneath shows who ran it, where, and why it was flagged.
+1. **Run the drill**, pressing Enter as the attacker reaches each step: login, delete backups, clear logs, encrypt Finance, steal HR data (the README has the table). Rows appear on both stations' Server log. SUSPICIOUS ones are red; the sidebar counts the ones nobody has reported.
+2. **On B,** filter to Suspicious and click the `rclone copy` row. The panel underneath shows who ran it, where, and why it was flagged.
 3. **On B,** press **Report to manager**. A's panel beeps three times and the alert sits at the top of A's control panel. B shows the row as REPORTED.
 4. **On A,** press **Acknowledge**, then the red button. The red LED lights, A's status reads **Internet CUT**, and a signed entry tells everyone. B's control panel shows A's laptop as offline. Chat between A and B keeps working.
 5. **On B,** click CONTAIN in the top bar. Only the manager moves the phase, so this sends A a request; A's panel beeps and the alert card has **Move to CONTAIN**.

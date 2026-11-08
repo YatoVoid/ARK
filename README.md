@@ -41,7 +41,7 @@ The report after Request report, and the breach clocks:
 
 ## What it does
 
-- **Two roles.** The station that starts the incident is the manager. Everyone who joins afterwards is an analyst, admitted by the manager after checking a six-digit code. Each window's title says which role it has, e.g. `ARK  Manager: Dana Kessler`.
+- **Roles and a team conversation.** The station that starts the incident is the incident lead (manager). Everyone else joins and is admitted by the manager after checking a six-digit code, and the manager gives them a role: Security, IT, Legal, Executive, Comms or Insurer. The Chat log reads as a conversation: avatars coloured by role, your messages on the right, alerts in red, admissions and network cuts as thin lines. Under your messages, "Received by" names the stations that hold them, taken from the sync messages they already send. Each window's title shows the role, e.g. `ARK  Legal: Priya Shah`.
 - **Server log.** `tools/ark-watch` reads sudo, SSH, su, account changes, typed shell commands and web requests on the watched server. Each one is signed into the log, and known attack steps are flagged SUSPICIOUS. An analyst sends one to the manager with **Report to manager**.
 - **Kill switch.** The manager's Arduino panel buzzes when an alert arrives. Red cuts that laptop off the internet and green restores it. ARK keeps working over the relay the whole time. The same buttons are on screen.
 - **Phases.** DETECT, CONTAIN, ERADICATE, RECOVER. Only the manager moves the incident. An analyst who clicks a phase sends the manager a request, and the manager gets a **Move to** button for it.
@@ -106,12 +106,21 @@ rm -rf station-a station-b build/tmp-*
 tools/ark-watch station-a
 ```
 
-Then, in a fifth, run the drill. It writes seven attacker-style commands to the journal, three seconds apart, and runs none of them:
+Then, in a fifth, run the drill. It plays a ransomware intrusion step by step, writing to the journal what the watcher would see on each machine, and runs nothing. Press Enter as the attacker (a teammate's console on another laptop, or you narrating) reaches each step:
 
 ```sh
-tools/drill.sh                                 # whoami, cat /etc/shadow, tar the payroll share, curl it out, add an SSH key, history -c
-DRILL_GAP=6 tools/drill.sh                     # slower, for presenting
+tools/drill.sh                                 # Enter per step
+DRILL_GAP=5 tools/drill.sh                     # no prompts, five seconds apart
 ```
+
+| Step | What the drill logs | ARK shows |
+|---|---|---|
+| 1 phishing | nothing, the mail never touches a server | nothing |
+| 2 login as m.ortiz | SSH login from 203.0.113.47 on FIN-LAPTOP-07 | WATCH: a login from an outside address |
+| 3 delete backups | `vssadmin delete shadows /all /quiet` | SUSPICIOUS: deletes the backup copies |
+| 4 clear logs | `wevtutil cl Security` | SUSPICIOUS: clears an event log |
+| 5 encrypt Finance | `lock --share \\FS-01\Finance ...` on FS-01 | SUSPICIOUS: encrypts a whole file share |
+| 6 steal HR data | `rclone copy \\HR-DB\Employees grayhound-drop:` on HR-DB | SUSPICIOUS: copies files out to cloud storage |
 
 To be the attacker by hand instead, load the shell hook and type commands. Every command typed in that shell is logged, and it does run:
 
@@ -123,7 +132,7 @@ cat /etc/shadow                                # fails without sudo, still logge
 **The story to show:**
 
 1. Rows appear on both windows' Server log (F6). The flagged ones are red, and the sidebar counts the ones nobody has reported.
-2. **Window B:** filter to Suspicious, click `cat /etc/shadow`, press **Report to manager**.
+2. **Window B:** filter to Suspicious, click the `rclone copy` row, press **Report to manager**, and say in chat what's happening, e.g. `Backups deleted, logs wiped, Finance encrypted, HR-DB uploading. Isolate NOW.`
 3. **Window A:** the alert sits at the top of the control panel. **Acknowledge**, then **CUT NETWORK** twice within 3 seconds. Both windows show A's laptop as off the internet, and chat keeps working.
 4. **Window B:** click CONTAIN in the top bar. A gets the request with a **Move to CONTAIN** button.
 5. **Window A:** **RESTORE NETWORK** once the systems are backed up.
@@ -145,7 +154,7 @@ Laptop A reaches the relay over USB. Laptop B reaches it over a Wi-Fi network th
 **The short way.** Each laptop has one script that installs missing packages, builds ARK and opens its window:
 
 ```sh
-./laptop-a.sh                    # laptop A: UNO Q and panel on USB; starts the model and the relay, prints the relay's address
+./laptop-a.sh                    # laptop A: UNO Q and panel on USB; starts the model, the relay and the server watcher, prints the relay's address
 ./laptop-b.sh 10.147.184.235     # laptop B: the address laptop A printed
 ```
 
@@ -227,7 +236,7 @@ tools/ark-watch station-a --print              # print events instead of sending
 tools/drill.sh                                 # rehearsal intrusion, runs nothing
 ```
 
-`tools/drill.sh` uses `logger -t ark-shell`, the same path as the shell hook, so its rows look exactly like typed commands. The rules that flag a row are `g_rules` in `src/events.HC`.
+`tools/drill.sh` writes through `logger --journald`, the same path as the shell hook, adding `ARK_USER` and `ARK_HOST` fields so each row shows the account and machine the step plays. The rules that flag a row are `g_rules` in `src/events.HC`.
 
 ## Report
 
@@ -259,7 +268,7 @@ About 7 to 8 s per report on an RTX 3050 Laptop GPU once the model is loaded.
 | `ARK_OPEN_CMD` | `xdg-open` | PDF viewer, e.g. `okular` |
 | `ARK_REPORT_CMD` | `tools/ark-report` | report tool (the tests use a stand-in) |
 | `OLLAMA_HOST` | `127.0.0.1:11434` | must point at this machine; anything else is refused |
-| `DRILL_GAP` | `3` | seconds between drill commands |
+| `DRILL_GAP` | unset | seconds between drill steps; unset means press Enter for each |
 
 `./station.sh DIR usb [ADB_SERIAL]` reaches the relay over USB through an adb port forward. `./station.sh DIR wifi HOST` reaches it at HOST. Both start a socat bridge and build `build/ark` if it's missing.
 

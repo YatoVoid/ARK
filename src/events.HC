@@ -133,8 +133,12 @@ Bool EventFromBody(U8 *body, Event *ev)
 // One rule per string: risk (2 suspicious, 1 watch), TAB, text matched
 // case-insensitively anywhere in the detail, TAB, why it matters. The
 // first match wins, so the specific patterns come first.
-#define RULES_N 43
+#define RULES_N 47
 U8 *g_rules[RULES_N] = {
+  "2\tvssadmin delete shadows\tdeletes the backup copies",
+  "2\twevtutil cl\tclears an event log",
+  "2\tlock --share\tencrypts a whole file share",
+  "2\trclone \tcopies files out to cloud storage",
   "2\t/etc/shadow\treads or changes the password hashes",
   "2\thistory -c\tclears the shell history",
   "2\tunset histfile\tturns off shell history",
@@ -180,6 +184,22 @@ U8 *g_rules[RULES_N] = {
   "1\ttar \tpacks files into an archive"
 };
 
+// An IPv4 address after "from " that isn't private, loopback or link-local.
+Bool OutsideAddress(U8 *detail)
+{
+  U8 *p = strstr(detail, "from ");
+  if (p == NULL || p[5] < '0' || p[5] > '9')
+    return FALSE;
+  U8 *end;
+  I64 a = strtoll(p + 5, &end, 10);
+  if (*end != '.')
+    return FALSE;
+  I64 b = strtoll(end + 1, NULL, 10);
+  if (a == 10 || a == 127 || (a == 192 && b == 168) || (a == 172 && b >= 16 && b <= 31) || (a == 169 && b == 254))
+    return FALSE;
+  return TRUE;
+}
+
 // How worrying an event is, and in a few words why. hour is the local hour
 // it happened, for flagging logins in the middle of the night.
 I64 EventRisk(Event *ev, I64 hour, U8 **why)
@@ -205,6 +225,10 @@ I64 EventRisk(Event *ev, I64 hour, U8 **why)
   if (ev->source == EV_LOGIN && StrCmp(ev->user, "root") == 0) {
     *why = "someone logged in as root";
     return RISK_SUS;
+  }
+  if (ev->source == EV_LOGIN && OutsideAddress(ev->detail)) {
+    *why = "a login from an outside address";
+    return RISK_WATCH;
   }
   if (ev->source == EV_LOGIN && (hour < 6 || hour >= 22)) {
     *why = "a login outside working hours";

@@ -31,6 +31,10 @@ class Peer
   U8 pk[PK_BYTES];
   U8 name[NAME_MAX];
   I64 heard;               // time() when its heads last arrived
+  // Its last heads: what it holds, per author. This is what "Received by"
+  // under a message is read from, so it's received, not read.
+  U8 heads[MAX_AUTHORS * (PK_BYTES + 4)];
+  I64 head_count;
 };
 
 class Team
@@ -67,7 +71,13 @@ U0 NameOf(Log *log, U8 *pk, U8 *out)
     }
     if (e->kind == KIND_MEMBER_ADD && e->body_len > PK_BYTES && Same(e->body, pk, PK_BYTES) &&
         log->has_admin && Same(e->author, log->admin, PK_BYTES)) {
-      CopyText(out, e->body + PK_BYTES, NAME_MAX);
+      I64 n = 0;
+      U8 *src = e->body + PK_BYTES;
+      while (n < NAME_MAX - 1 && src[n] && src[n] != '\n') {
+        out[n] = src[n];
+        n++;
+      }
+      out[n] = 0;
       return;
     }
   }
@@ -116,7 +126,37 @@ I64 MakeHeads(Station *s, U8 *out)
   return 3 + plain_len + NONCE_BYTES + MAC_BYTES;
 }
 
-U0 NotePeer(Team *t, U8 *pk, U8 *name)
+// The role the manager gave pk when admitting it: the text after the
+// name in its MEMBER_ADD. The manager is "Incident lead". Empty if none.
+U0 RoleOf(Log *log, U8 *pk, U8 *out)
+{
+  out[0] = 0;
+  if (log->has_admin && Same(pk, log->admin, PK_BYTES)) {
+    StrCpy(out, "Incident lead");
+    return;
+  }
+  for (I64 i = 0; i < log->count; i++) {
+    Entry *e = &log->entries[i];
+    if (e->kind == KIND_MEMBER_ADD && e->status == ST_OK && e->body_len > PK_BYTES &&
+        Same(e->body, pk, PK_BYTES) && log->has_admin && Same(e->author, log->admin, PK_BYTES)) {
+      U8 *nl = strchr(e->body + PK_BYTES, '\n');
+      if (nl != NULL)
+        CopyText(out, nl + 1, NAME_MAX);
+      return;
+    }
+  }
+}
+
+// Does peer p hold author's entry number seq, going by its last heads?
+Bool PeerHas(Peer *p, U8 *author, I64 seq)
+{
+  for (I64 j = 0; j < p->head_count; j++)
+    if (Same(p->heads + j * (PK_BYTES + 4), author, PK_BYTES))
+      return Get32(p->heads + j * (PK_BYTES + 4) + PK_BYTES) >= seq;
+  return FALSE;
+}
+
+U0 NotePeer(Team *t, U8 *pk, U8 *name, U8 *list, I64 count)
 {
   I64 i = 0;
   while (i < t->peer_count && !Same(t->peers[i].pk, pk, PK_BYTES))
@@ -129,6 +169,10 @@ U0 NotePeer(Team *t, U8 *pk, U8 *name)
   }
   CopyText(t->peers[i].name, name, NAME_MAX);
   t->peers[i].heard = time(NULL);
+  if (count > MAX_AUTHORS)
+    count = MAX_AUTHORS;
+  MemCpy(t->peers[i].heads, list, count * (PK_BYTES + 4));
+  t->peers[i].head_count = count;
 }
 
 // Answers heads: sends every entry the other station is missing, oldest
@@ -211,7 +255,7 @@ U0 TeamReceive(Station *s, Team *t, Link *link, U8 *msg, I64 len)
       if (PK_BYTES + NAME_MAX + 1 + count * (PK_BYTES + 4) == plain_len) {
         U8 name[NAME_MAX];
         CopyText(name, plain + PK_BYTES, NAME_MAX);
-        NotePeer(t, plain, name);
+        NotePeer(t, plain, name, plain + PK_BYTES + NAME_MAX + 1, count);
         AnswerHeads(s, link, plain + PK_BYTES + NAME_MAX + 1, count);
       }
     } else {
@@ -223,16 +267,23 @@ U0 TeamReceive(Station *s, Team *t, Link *link, U8 *msg, I64 len)
 
 // Admin approves the pending join: a MEMBER_ADD entry for everyone, and
 // the team key sealed to the new member.
-U0 ApproveJoin(Station *s, Team *t, Link *link)
+// role, if given, follows the name after a newline.
+U0 ApproveJoin(Station *s, Team *t, Link *link, U8 *role = NULL)
 {
   if (!t->join_pending)
     return;
   U8 *msg = MAlloc(MSG_MAX);
-  U8 body[PK_BYTES + NAME_MAX];
+  U8 body[PK_BYTES + 2 * NAME_MAX + 1];
   MemCpy(body, t->join_pk, PK_BYTES);
-  I64 name_len = StrLen(t->join_name);
-  MemCpy(body + PK_BYTES, t->join_name, name_len);
-  LinkSend(link, msg, Post(s, KIND_MEMBER_ADD, PHASE_NONE, body, PK_BYTES + name_len, msg));
+  I64 len = PK_BYTES + StrLen(t->join_name);
+  MemCpy(body + PK_BYTES, t->join_name, len - PK_BYTES);
+  if (role != NULL && role[0]) {
+    body[len++] = '\n';
+    I64 rl = MinI64(StrLen(role), NAME_MAX - 1);
+    MemCpy(body + len, role, rl);
+    len += rl;
+  }
+  LinkSend(link, msg, Post(s, KIND_MEMBER_ADD, PHASE_NONE, body, len, msg));
 
   msg[0] = MSG_KEY;
   MemCpy(msg + 1, t->join_pk, PK_BYTES);

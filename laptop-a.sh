@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Laptop A, the manager: checks packages, builds ARK, starts the report
-# model and the relay hub on the UNO Q, then opens the manager's window.
+# model, the relay hub on the UNO Q and the server watcher, then opens the
+# manager's window.
 #
 #   ./laptop-a.sh
 #
@@ -79,4 +80,17 @@ if [ "${ARK_REAL_CUT:-}" != 1 ]; then
 fi
 export ARK_COST_PER_RECORD="${ARK_COST_PER_RECORD:-160}"
 
-exec ./station.sh "$station" usb "$uno"
+# The watcher feeds the Server log. The window creates the station
+# directory on first run, so the watcher waits for it.
+watcher=
+if ! pgrep -f "ark-watch $station\$" >/dev/null; then
+  (
+    until [ -d "$station" ]; do sleep 1; done
+    exec tools/ark-watch "$station"
+  ) > build/watch.log 2>&1 &
+  watcher=$!
+  echo "server watcher started (build/watch.log)"
+fi
+trap '[ -n "$watcher" ] && pkill -P "$watcher" 2>/dev/null; [ -n "$watcher" ] && kill "$watcher" 2>/dev/null' EXIT
+
+./station.sh "$station" usb "$uno"

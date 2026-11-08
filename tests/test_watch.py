@@ -28,6 +28,8 @@ def j(ident, msg, uid="1000"):
 
 
 check(j("ark-shell", "cat /etc/shadow", "0"), ("shell", "root", "cat /etc/shadow"), "shell command")
+check(w.from_journal({"SYSLOG_IDENTIFIER": "ark-shell", "MESSAGE": "wevtutil cl Security", "_UID": "1000",
+                     "ARK_USER": "m.ortiz"}), ("shell", "m.ortiz", "wevtutil cl Security"), "drill names the account")
 check(j("sudo", "wali : TTY=pts/3 ; PWD=/home/wali ; USER=root ; COMMAND=/usr/bin/systemctl stop nginx"),
       ("sudo", "wali", "/usr/bin/systemctl stop nginx"), "sudo command")
 check(j("sudo", "wali : 3 incorrect password attempts ; TTY=pts/3 ; PWD=/ ; USER=root ; COMMAND=/bin/sh"),

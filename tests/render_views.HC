@@ -57,7 +57,7 @@ I32 Main(I32 argc, U8 **argv)
 {
   CryptoInit();
   system("rm -rf build/tmp-ui build/tmp-ui-b");
-  App *a = AppNew("build/tmp-ui", "/tmp/ark-station-a", NULL);
+  App *a = AppNew("build/tmp-ui", "/tmp/ark-render-views", NULL);
   if (!CanvasOpen(a->cv, "render", "assets/fonts")) {
     "canvas: %s\n", SDL_GetError();
     return 1;
@@ -181,6 +181,66 @@ I32 Main(I32 argc, U8 **argv)
   Shot(a, "big-server");
   Resize(a, 1920, 1080);
   Shot(a, "fhd-server");
+
+  // The conversation: Legal joins, three roles talk, receipts from heads.
+  Resize(a, 1440, 900);
+  Station *p3 = MAlloc(sizeof(Station));
+  StationInit(p3, "build/tmp-ui-p");
+  StationCreate(p3, p3->dir, "Priya Shah", "third passphrase");
+  MemCpy(p3->keys[0], a->st->keys[0], KEY_BYTES);
+  p3->have_key[0] = TRUE;
+  p3->epoch = 0;
+  a->team.join_pending = TRUE;
+  MemCpy(a->team.join_pk, p3->pk, PK_BYTES);
+  StrCpy(a->team.join_name, "Priya Shah");
+  a->approve_role = 2;
+  Approve(a);
+  a->team.join_pending = FALSE;
+  for (I64 i = 0; i < mgr->log->count; i++)
+    StationReceive(p3, m2, MakeMessage(mgr, &mgr->log->entries[i], m2));
+  U8 *talk[6] = {
+    "HR-DB is uploading to 203.0.113.88 right now. rclone, about 40 GB. Isolate?",
+    "Cutting my laptop now. Everyone stay on ARK, not email or Teams.",
+    "If HR-DB holds EU staff, the GDPR clock is 72 hours. I need a record count.",
+    "Upload stalled at 62% when the link dropped. Pulling the count from HR-DB.",
+    "About 2,300 employee records, 140 in the EU.",
+    "Priya, start the EU notice. I'll brief the CEO at 09:00."
+  };
+  Station *who[6] = {b, mgr, p3, b, b, mgr};
+  for (I64 i = 0; i < 6; i++) {
+    if (who[i] == mgr)
+      Post(mgr, KIND_CHAT, PHASE_CONTAIN, talk[i], StrLen(talk[i]), m2);
+    else
+      StationReceive(mgr, m2, Post(who[i], KIND_CHAT, PHASE_CONTAIN, talk[i], StrLen(talk[i]), m2));
+  }
+  // Marcus has everything; Priya hasn't caught up on the last line yet.
+  a->team.peer_count = 2;
+  Station *ps[2] = {b, p3};
+  for (I64 k = 0; k < 2; k++) {
+    Peer *pe = &a->team.peers[k];
+    MemCpy(pe->pk, ps[k]->pk, PK_BYTES);
+    StrCpy(pe->name, ps[k]->name);
+    pe->heard = time(NULL);
+    pe->head_count = 3;
+    Station *au[3] = {mgr, b, p3};
+    for (I64 j = 0; j < 3; j++) {
+      MemCpy(pe->heads + j * (PK_BYTES + 4), au[j]->pk, PK_BYTES);
+      I64 top = 0;
+      for (I64 i = 0; i < mgr->log->count; i++)
+        if (Same(mgr->log->entries[i].author, au[j]->pk, PK_BYTES))
+          top = MaxI64(top, mgr->log->entries[i].seq);
+      if (k == 1 && au[j] == mgr)
+        top--;
+      Put32(pe->heads + j * (PK_BYTES + 4) + PK_BYTES, top);
+    }
+  }
+  a->msg[0] = 0;
+  a->filter = 0;
+  a->scroll = 0;
+  a->view = V_LOG;
+  Shot(a, "comms");
+  a->view = V_TEAM;
+  Shot(a, "team-roles");
   "rendered\n";
   return 0;
 }

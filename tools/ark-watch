@@ -60,7 +60,10 @@ def from_journal(entry):
     if isinstance(msg, list):  # journald sends non-UTF-8 messages as bytes
         msg = bytes(msg).decode("utf-8", "replace")
     if ident == "ark-shell":
-        return ("shell", user_of(entry), msg)
+        # tools/drill.sh plays other accounts with an ARK_USER journal field.
+        # It's no less trustworthy than the message itself: any local user
+        # can write either with logger.
+        return ("shell", entry.get("ARK_USER") or user_of(entry), msg)
     if ident == "sudo":
         m = SUDO_BAD.match(msg)
         if m:
@@ -156,15 +159,18 @@ def main():
                 line = s.readline()
                 if not line:
                     sys.exit("%s stopped" % ("journalctl" if s is journal.stdout else "tail"))
+                host = args.host
                 if s is journal.stdout:
                     try:
-                        event = from_journal(json.loads(line))
+                        entry = json.loads(line)
                     except ValueError:
                         continue
+                    event = from_journal(entry)
+                    host = entry.get("ARK_HOST") or host   # the machine a drill step plays
                 else:
                     event = from_access(line)
                 if event:
-                    feed.write(args.host, event)
+                    feed.write(host, event)
     except KeyboardInterrupt:
         pass
     finally:

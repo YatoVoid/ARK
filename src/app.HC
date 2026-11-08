@@ -77,6 +77,7 @@
 #define H_CLEAR      28   // delete this station's data and start over
 #define H_BACK       29   // back to the name step, nothing written yet
 #define H_ALERT_MGR  30   // a member's panel: start an alert to the manager
+#define H_ROLE       31   // pick the role for the next approval
 
 // Glyphs from assets/icons/g-*.img, tinted when drawn.
 #define G_OVERVIEW   0
@@ -158,6 +159,13 @@ U8 *g_status_short[5] = {"locked by ransomware", "copied out", "not confirmed ye
 U8 *g_where_picks[5] = {"TX", "CA", "NY", "EU", "-"};
 U8 *g_where_labels[5] = {"TX", "CA", "NY", "EU", "None"};
 U8 *g_filter_names[5] = {"All", "Notes", "Chat", "Scope", "Team"};
+
+// Stakeholder roles the manager picks from when admitting someone. The
+// manager is always "Incident lead". Colours are identity only, for the
+// avatars, so they stay away from the red/amber/green status colours.
+#define ROLES 6
+U8 *g_roles[ROLES] = {"Security", "IT", "Legal", "Executive", "Comms", "Insurer"};
+U32 g_role_color[ROLES] = {0xFF6FA0E8, 0xFF45B9AE, 0xFFB18AE6, 0xFFD9B56B, 0xFFE07FA8, 0xFF9AA5BE};
 U8 *g_sfilter_names[5] = {"All", "Suspicious", "Commands", "Logins", "Requests"};
 U8 *g_month[12] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
 U8 *g_wday[7] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
@@ -217,6 +225,7 @@ class App
   I64 focus;              // a FLD_ value, or -1
   I64 kind;               // KIND_NOTE or KIND_CHAT for the composer
   I64 filter;
+  I64 approve_role;       // index into g_roles for the next approval
   I64 scroll;             // log lines scrolled back from the newest
   Bool scope_open;
   I64 scope_type;         // -1 until picked
@@ -723,7 +732,12 @@ U0 EntryText(Log *log, Entry *e, U8 *out)
       NameOf(log, e->body, name);
     else
       StrCpy(name, "?");
-    snprintf(out, BODY_MAX + 128, "Admitted %s to the team", name);
+    U8 role[NAME_MAX];
+    RoleOf(log, e->body, role);
+    if (role[0])
+      snprintf(out, BODY_MAX + 128, "Admitted %s to the team as %s", name, role);
+    else
+      snprintf(out, BODY_MAX + 128, "Admitted %s to the team", name);
   } else if (e->kind == KIND_SCOPE) {
     U8 body[BODY_MAX + 1];
     StrCpy(body, e->body);
@@ -1585,6 +1599,228 @@ U0 LogList(App *a, I64 x, I64 y, I64 w, I64 h, I64 scroll, Bool filtered)
     TextMid(c, F_BODY, x + 16, y + 30, "No entries match. Clear the search or pick All.", C_FAINT);
 }
 
+// ---- conversation view for the Chat log --------------------------------
+
+U32 RoleColor(U8 *role)
+{
+  if (StrCmp(role, "Incident lead") == 0)
+    return C_CYAN;
+  for (I64 i = 0; i < ROLES; i++)
+    if (StrCmp(role, g_roles[i]) == 0)
+      return g_role_color[i];
+  return C_FAINT;
+}
+
+U0 Initials(U8 *name, U8 *out)
+{
+  I64 n = 0;
+  Bool start = TRUE;
+  for (I64 i = 0; name[i] && n < 2; i++) {
+    if (name[i] == ' ') {
+      start = TRUE;
+    } else if (start) {
+      out[n++] = ToUpper(name[i]);
+      start = FALSE;
+    }
+  }
+  out[n] = 0;
+}
+
+U0 Avatar(App *a, U8 *pk, I64 cx, I64 cy)
+{
+  U8 name[NAME_MAX], role[NAME_MAX], ini[4];
+  NameOf(a->st->log, pk, name);
+  RoleOf(a->st->log, pk, role);
+  Initials(name, ini);
+  Dot(a->cv, cx, cy, 30, RoleColor(role));
+  TextMid(a->cv, F_LABEL, cx - TextWidth(a->cv, F_LABEL, ini) / 2, cy, ini, C_BG);
+}
+
+Bool IsMessage(Entry *e)
+{
+  return e->kind == KIND_NOTE || e->kind == KIND_CHAT || e->kind == KIND_ALERT || e->kind == KIND_SCOPE;
+}
+
+// Names of the other stations that hold e, from their last heads.
+I64 ReceivedBy(App *a, Entry *e, U8 *out, I64 cap)
+{
+  out[0] = 0;
+  I64 n = 0;
+  for (I64 i = 0; i < a->team.peer_count; i++) {
+    Peer *p = &a->team.peers[i];
+    if (Same(p->pk, a->st->pk, PK_BYTES) || !PeerHas(p, e->author, e->seq))
+      continue;
+    I64 l = StrLen(out);
+    if (n > 0 && l + 2 < cap) {
+      StrCpy(out + l, ", ");
+      l += 2;
+    }
+    CopyText(out + l, p->name, cap - l);
+    n++;
+  }
+  return n;
+}
+
+#define CV_LINES 6
+
+// One item of the conversation. Returns its height; with draw FALSE it only
+// measures. cont means the same person spoke just before, so the name and
+// avatar are left out.
+I64 ConvoItem(App *a, Entry *e, U8 *text, Bool cont, I64 x, I64 y, I64 w, Bool draw)
+{
+  Canvas *c = a->cv;
+  U8 clock[8];
+  ClockText(e->time, clock);
+  if (!IsMessage(e)) {
+    if (draw) {
+      U8 line[BODY_MAX + 160];
+      snprintf(line, BODY_MAX + 160, "%s   %s", clock, text);
+      I64 lw = MinI64(TextWidth(c, F_SMALL, line), w - 80);
+      I64 lx = x + (w - lw) / 2;
+      HLine(c, x + 24, y + 15, lx - x - 36, C_ROWLINE);
+      HLine(c, lx + lw + 12, y + 15, x + w - 24 - (lx + lw + 12), C_ROWLINE);
+      TextMid(c, F_SMALL, lx, y + 15, line, C_FAINT, lw);
+    }
+    return 30;
+  }
+  Bool mine = Same(e->author, a->st->pk, PK_BYTES);
+  I64 maxw = MinI64(w - 150, 640);
+  I64 starts[CV_LINES], lens[CV_LINES];
+  I64 lines = Wrap(c, F_BODY, text, maxw - 28, starts, lens, CV_LINES);
+  I64 head = 22;
+  if (cont)
+    head = 0;
+  I64 bh = 16 + lines * 19;
+  I64 rec = 0;
+  if (mine && a->member_count > 1)
+    rec = 18;
+  I64 h = head + bh + rec + 10;
+  if (!draw)
+    return h;
+
+  I64 bw = 0;
+  for (I64 i = 0; i < lines; i++)
+    bw = MaxI64(bw, TextWidth(c, F_BODY, text + starts[i], lens[i]));
+  bw += 28;
+  U8 tag[24];
+  U32 tc;
+  Bool badge = EntryTag(e, text, tag, &tc);
+  I64 bx = x + 58;
+  if (mine)
+    bx = x + w - 58 - bw;
+
+  if (!cont) {
+    U8 name[NAME_MAX], role[NAME_MAX];
+    NameOf(a->st->log, e->author, name);
+    RoleOf(a->st->log, e->author, role);
+    if (mine)
+      Avatar(a, e->author, x + w - 30, y + 26);
+    else
+      Avatar(a, e->author, x + 30, y + 26);
+    if (mine)
+      StrCpy(name, "You");
+    I64 nw = TextWidth(c, F_SEMI, name), rw = TextWidth(c, F_SMALL, role), cw = TextWidth(c, F_MONO, clock);
+    I64 tw = 0;
+    if (badge)
+      tw = TextWidth(c, F_LABEL, tag) + 22;
+    I64 hx = bx + 2;
+    if (mine)
+      hx = x + w - 58 - (nw + 10 + rw + 10 + cw + tw) - 2;
+    Text(c, F_SEMI, hx, y, name, C_TEXT);
+    hx += nw + 10;
+    Text(c, F_SMALL, hx, y + 2, role, RoleColor(role));
+    hx += rw + 10;
+    Text(c, F_MONO, hx, y + 2, clock, C_FAINT);
+    hx += cw + 10;
+    if (badge)
+      Badge(a, hx, y + 9, tag, tc);
+  }
+  I64 by = y + head;
+  U32 bg = C_RAISED, border = C_LINE2;
+  if (mine) {
+    bg = Mix(C_CYAN, C_SURFACE, 26);
+    border = Mix(C_CYAN, C_SURFACE, 60);
+  }
+  if (e->kind == KIND_ALERT) {
+    bg = Mix(C_RED, C_SURFACE, 40);
+    border = C_RED;
+  }
+  Box(c, bx, by, bw, bh, 10, bg, border);
+  U32 fg = C_TEXT;
+  if (e->status != ST_OK)
+    fg = C_FAINT;
+  for (I64 i = 0; i < lines; i++)
+    RichText(c, F_BODY, bx + 14, by + 9 + i * 19, text + starts[i], lens[i], fg);
+  if (e->status != ST_OK)
+    Badge(a, bx + bw + 8, by + bh / 2, StatusName(e->status), C_RED);
+  if (rec) {
+    U8 names[160], line[200];
+    if (ReceivedBy(a, e, names, 160) > 0) {
+      snprintf(line, 200, "Received by %s", names);
+      TextMid(c, F_SMALL, x + w - 58 - MinI64(TextWidth(c, F_SMALL, line), maxw), by + bh + 9, line, C_GREEN_FG, maxw);
+    } else {
+      StrCpy(line, "Sent. Not received by anyone yet");
+      TextMid(c, F_SMALL, x + w - 58 - TextWidth(c, F_SMALL, line), by + bh + 9, line, C_FAINT);
+    }
+  }
+  return h;
+}
+
+// The Chat log as a conversation, newest at the bottom. scroll counts
+// items back from the newest.
+U0 ConvoList(App *a, I64 x, I64 y, I64 w, I64 h, I64 scroll)
+{
+  Canvas *c = a->cv;
+  Log *log = a->st->log;
+  CollectMembers(a);
+  LogSorted(log, a->order);
+  U8 *text = MAlloc(BODY_MAX + 128);
+  I64 *list = MAlloc(8 * (log->count + 1));
+  I64 total = 0;
+  for (I64 k = 0; k < log->count; k++) {
+    Entry *e = &log->entries[a->order[k]];
+    if (e->kind == KIND_EVENT)
+      continue;
+    EntryText(log, e, text);
+    if (!PassesFilter(a, e, text))
+      continue;
+    list[total++] = a->order[k];
+  }
+  I64 pick[LIST_MAX], heights[LIST_MAX];
+  Bool conts[LIST_MAX];
+  I64 n = 0, used = 0;
+  for (I64 k = total - 1 - scroll; k >= 0 && n < LIST_MAX; k--) {
+    Entry *e = &log->entries[list[k]];
+    Bool cont = FALSE;
+    if (k > 0 && IsMessage(e)) {
+      Entry *p = &log->entries[list[k - 1]];
+      cont = IsMessage(p) && Same(p->author, e->author, PK_BYTES) && e->time - p->time <= 300;
+    }
+    EntryText(log, e, text);
+    I64 ih = ConvoItem(a, e, text, cont, x, 0, w, FALSE);
+    if (used + ih > h - 24)
+      break;
+    pick[n] = list[k];
+    heights[n] = ih;
+    conts[n] = cont;
+    used += ih;
+    n++;
+  }
+  I64 ry = y + 14;
+  if (used >= h - 80)
+    ry = y + h - 10 - used;
+  for (I64 i = n - 1; i >= 0; i--) {
+    Entry *e = &log->entries[pick[i]];
+    EntryText(log, e, text);
+    ConvoItem(a, e, text, conts[i], x, ry, w, TRUE);
+    ry += heights[i];
+  }
+  Free(list);
+  Free(text);
+  if (n == 0 && log->count > 0)
+    TextMid(c, F_BODY, x + 16, y + 30, "No entries match. Clear the search or pick All.", C_FAINT);
+}
+
 U0 DrawOverview(App *a)
 {
   Canvas *c = a->cv;
@@ -1836,7 +2072,7 @@ U0 DrawLogPage(App *a)
     Text(c, F_H2, CX0 + 20, y + 24, "Nothing logged yet", C_TEXT);
     Text(c, F_BODY, CX0 + 20, y + 50, "Write what was seen first, where and by whom. Times and names are added for you.", C_MUTED);
   } else {
-    LogList(a, CX0, y, (g_cw - SIDE_W - PANEL_W - 2 * PAD), h, a->scroll, TRUE);
+    ConvoList(a, CX0, y, (g_cw - SIDE_W - PANEL_W - 2 * PAD), h, a->scroll);
     if (a->scroll > 0) {
       U8 note[64];
       snprintf(note, 64, "Scrolled back %ld. PgDn or wheel for newer.", a->scroll);
@@ -2253,7 +2489,7 @@ U0 DrawTeamPage(App *a)
   PageHead(a, "Team", "Everyone admitted to this incident. Only the manager can admit people.");
   I64 y = TOP_H + 84;
   if (a->team.join_pending && IsAdmin(a->st)) {
-    Box(c, CX0, y, (g_cw - SIDE_W - PANEL_W - 2 * PAD), 150, 8, Mix(C_CYAN, C_SURFACE, 20), C_CYAN);
+    Box(c, CX0, y, (g_cw - SIDE_W - PANEL_W - 2 * PAD), 200, 8, Mix(C_CYAN, C_SURFACE, 20), C_CYAN);
     U8 line[96];
     snprintf(line, 96, "%s asks to join", a->team.join_name);
     Text(c, F_H2, CX0 + 20, y + 18, line, C_TEXT);
@@ -2262,7 +2498,26 @@ U0 DrawTeamPage(App *a)
     Text(c, F_BODY, CX0 + 300, y + 76, "Approve only if it matches exactly.", C_TEXT);
     Text(c, F_SMALL, CX0 + 300, y + 98, "A different code means a different device is asking. Don't approve it.", C_MUTED);
     Button(a, CX0 + (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 20 - 150, y + 20, 150, 40, "Approve", BTN_GREEN, H_APPROVE, 0, G_TEAM);
-    y += 166;
+    Text(c, F_SEMI, CX0 + 20, y + 162, "Their role", C_TEXT);
+    I64 rx = CX0 + 110;
+    for (I64 r = 0; r < ROLES; r++) {
+      I64 rw = TextWidth(c, F_MED, g_roles[r]) + 40;
+      Bool on = a->approve_role == r;
+      U32 bg = C_BG, border = C_LINE2, fg = C_MUTED;
+      if (on) {
+        bg = Mix(g_role_color[r], C_SURFACE, 40);
+        border = g_role_color[r];
+        fg = C_TEXT;
+      } else if (Hover(a, rx, y + 150, rw, 32)) {
+        fg = C_TEXT;
+      }
+      Box(c, rx, y + 150, rw, 32, 6, bg, border);
+      Dot(c, rx + 14, y + 166, 10, g_role_color[r]);
+      TextMid(c, F_MED, rx + 26, y + 166, g_roles[r], fg);
+      AddHit(a, rx, y + 150, rw, 32, H_ROLE, r);
+      rx += rw + 8;
+    }
+    y += 216;
   }
   CollectMembers(a);
   I64 h = 43 + MaxI64(1, a->member_count) * 48 + 8;
@@ -2288,8 +2543,12 @@ U0 DrawTeamPage(App *a)
     I64 nx = TextMid(c, F_SEMI, CX0 + 40, cy, m->name, C_TEXT, 200);
     if (Same(m->pk, a->st->pk, PK_BYTES))
       TextMid(c, F_SMALL, nx + 8, cy, "you", C_FAINT);
+    U8 role[NAME_MAX];
+    RoleOf(a->st->log, m->pk, role);
     if (m->admin)
       Badge(a, CX0 + 260, cy, "MANAGER", C_CYAN);
+    else if (role[0])
+      Badge(a, CX0 + 260, cy, role, RoleColor(role));
     else
       Badge(a, CX0 + 260, cy, "MEMBER", C_FAINT);
     U8 when[32], line[48], fp[32];
@@ -3151,8 +3410,14 @@ U0 WindowTitle(App *a)
   U8 title[160];
   if (Ready(a) && IsAdmin(a->st))
     snprintf(title, 160, "ARK  Manager: %s", a->st->name);
-  else if (Ready(a))
-    snprintf(title, 160, "ARK  Analyst: %s", a->st->name);
+  else if (Ready(a)) {
+    U8 role[NAME_MAX];
+    RoleOf(a->st->log, a->st->pk, role);
+    if (role[0])
+      snprintf(title, 160, "ARK  %s: %s", role, a->st->name);
+    else
+      snprintf(title, 160, "ARK  Analyst: %s", a->st->name);
+  }
   else if (a->mode == MODE_UNLOCK)
     snprintf(title, 160, "ARK  Locked: %s", a->st->dir);
   else if (a->mode == MODE_READY)
@@ -3339,9 +3604,9 @@ U0 Approve(App *a)
     return;
   U8 name[NAME_MAX];
   CopyText(name, a->team.join_name, NAME_MAX);
-  ApproveJoin(a->st, &a->team, &a->link);
-  U8 line[96];
-  snprintf(line, 96, "%s admitted. They now get the key and the whole log.", name);
+  ApproveJoin(a->st, &a->team, &a->link, g_roles[a->approve_role]);
+  U8 line[128];
+  snprintf(line, 128, "%s admitted as %s. They now get the key and the whole log.", name, g_roles[a->approve_role]);
   Say(a, line, C_GREEN_FG);
 }
 
@@ -3642,6 +3907,8 @@ U0 Act(App *a, I64 id, I64 arg)
   } else if (id == H_KIND) {
     a->kind = arg;
     a->focus = FLD_COMPOSE;
+  } else if (id == H_ROLE) {
+    a->approve_role = arg;
   } else if (id == H_FILTER) {
     a->filter = arg;
     a->scroll = 0;
