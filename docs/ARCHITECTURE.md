@@ -33,7 +33,7 @@ Each station is one HolyC program that thinks it's talking to a serial port. soc
 | `tests/render_demo.HC`, `tools/make-demo-gif.py` | run both stations through the demo story and turn the screens into `docs/demo.gif` (and a video with `--mp4`) | run |
 | `tools/make-screens.py` | puts renders in a window frame titled with the role, for `docs/screens` | run |
 | `tools/drill.sh` | a rehearsal intrusion for demos: logs attacker-style commands without running them | run |
-| `tools/make-icons.py` | draws the Network page icons as SVG and converts them to the raw RGBA files the station loads | run |
+| `tools/make-icons.py` | draws the Network page icons and the 30 glyphs (pages, phases, event types, data types, panel buttons, status lights) as SVG and converts them to the raw RGBA files the station loads; glyphs are tinted when drawn | run |
 | `firmware/panel/panel.ino` | Arduino UNO: red CUT and green RESTORE buttons, LEDs for internet on/cut, buzzer for alerts | compiles; earlier version tested on hardware |
 
 ## Link layer (built)

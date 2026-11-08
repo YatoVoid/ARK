@@ -78,6 +78,51 @@
 #define H_BACK       29   // back to the name step, nothing written yet
 #define H_ALERT_MGR  30   // a member's panel: start an alert to the manager
 
+// Glyphs from assets/icons/g-*.img, tinted when drawn.
+#define G_OVERVIEW   0
+#define G_SERVER     1
+#define G_CHAT       2
+#define G_SCOPE      3
+#define G_CLOCK      4
+#define G_TEAM       5
+#define G_NETWORK    6
+#define G_REPORT     7
+#define G_GUIDE      8
+#define G_GLOBEOFF   9
+#define G_BELL       10
+#define G_LOCK       11
+#define G_LOCKX      12
+#define G_GLOBE      13
+#define G_RELAY      14
+#define G_CHAIN      15
+#define G_TERMINAL   16
+#define G_SHIELD     17
+#define G_LOGIN      18
+#define G_ACCOUNT    19
+#define G_PII        20
+#define G_PHI        21
+#define G_PCI        22
+#define G_CRED       23
+#define G_FOLDER     24
+#define G_DETECT     25
+#define G_CONTAIN    26
+#define G_ERADICATE  27
+#define G_RECOVER    28
+#define G_PENCIL     29
+#define GLYPHS      30
+U8 *g_glyph_files[GLYPHS] = {"g-overview", "g-server", "g-chat", "g-scope", "g-clock", "g-team", "g-network",
+                             "g-report", "g-guide", "g-globeoff", "g-bell", "g-lock", "g-lockx", "g-globe",
+                             "g-relay", "g-chain", "g-terminal", "g-shield", "g-login", "g-account", "g-pii",
+                             "g-phi", "g-pci", "g-cred", "g-folder", "g-detect", "g-contain", "g-eradicate",
+                             "g-recover", "g-pencil"};
+I64 g_phase_glyph[5] = {G_GUIDE, G_DETECT, G_CONTAIN, G_ERADICATE, G_RECOVER};
+// Page order is V_OVERVIEW..V_GUIDE.
+I64 g_view_glyph[9] = {G_OVERVIEW, G_SERVER, G_CHAT, G_SCOPE, G_CLOCK, G_TEAM, G_NETWORK, G_REPORT, G_GUIDE};
+// Server event sources, in g_ev_source order: shell, sudo, login, fail, request, account.
+I64 g_ev_glyph[6] = {G_TERMINAL, G_SHIELD, G_LOGIN, G_LOCKX, G_GLOBE, G_ACCOUNT};
+// Data types, in g_data_types order.
+I64 g_type_glyph[5] = {G_PII, G_PHI, G_PCI, G_CRED, G_FOLDER};
+
 #define RS_NONE     0
 #define RS_RUNNING  1
 #define RS_DONE     2
@@ -223,6 +268,7 @@ class App
   U8 title[160];          // window title last set
   Bool icons_loaded;
   Image icon_laptop, icon_relay;
+  Image glyphs[GLYPHS];
   I64 report_state;       // RS_ value
   I64 report_started;
   Bool report_warmed;
@@ -854,6 +900,32 @@ Bool ServerPasses(App *a, I64 idx, Event *ev)
 
 // ---- widgets --------------------------------------------------------------
 
+I64 TypeGlyph(U8 *type)
+{
+  for (I64 i = 0; i < 5; i++)
+    if (StrCmp(type, g_data_types[i]) == 0)
+      return g_type_glyph[i];
+  return G_FOLDER;
+}
+
+U0 LoadIcons(App *a)
+{
+  if (a->icons_loaded)
+    return;
+  LoadImage(a->cv, "laptop", &a->icon_laptop);
+  LoadImage(a->cv, "relay", &a->icon_relay);
+  for (I64 i = 0; i < GLYPHS; i++)
+    LoadImage(a->cv, g_glyph_files[i], &a->glyphs[i]);
+  a->icons_loaded = TRUE;
+}
+
+// A glyph centred on (cx, cy), size units square.
+U0 Icon(App *a, I64 g, I64 cx, I64 cy, I64 size, U32 color)
+{
+  LoadIcons(a);
+  DrawImage(a->cv, &a->glyphs[g], cx - size / 2, cy - size / 2, size, color);
+}
+
 U0 AddHit(App *a, I64 x, I64 y, I64 w, I64 h, I64 id, I64 arg = 0)
 {
   if (a->hit_count == HITS)
@@ -878,7 +950,7 @@ Bool Hover(App *a, I64 x, I64 y, I64 w, I64 h)
 #define BTN_RED      3
 #define BTN_OFF      4
 
-U0 Button(App *a, I64 x, I64 y, I64 w, I64 h, U8 *label, I64 style, I64 id, I64 arg = 0)
+U0 Button(App *a, I64 x, I64 y, I64 w, I64 h, U8 *label, I64 style, I64 id, I64 arg = 0, I64 glyph = -1)
 {
   Canvas *c = a->cv;
   U32 bg = C_SURFACE, border = C_LINE2, fg = C_TEXT;
@@ -906,7 +978,13 @@ U0 Button(App *a, I64 x, I64 y, I64 w, I64 h, U8 *label, I64 style, I64 id, I64 
   if (style == BTN_PRIMARY)
     f = F_SEMI;
   I64 tw = TextWidth(c, f, label);
-  TextMid(c, f, x + (w - tw) / 2, y + h / 2, label, fg, w - 16);
+  if (glyph >= 0) {
+    I64 lx = x + (w - tw - 22) / 2 + 22;
+    Icon(a, glyph, lx - 13, y + h / 2, 15, fg);
+    TextMid(c, f, lx, y + h / 2, label, fg, w - (lx - x) - 8);
+  } else {
+    TextMid(c, f, x + (w - tw) / 2, y + h / 2, label, fg, w - 16);
+  }
   if (style != BTN_OFF)
     AddHit(a, x, y, w, h, id, arg);
 }
@@ -971,7 +1049,7 @@ U0 Input(App *a, I64 fld, I64 x, I64 y, I64 w, I64 h, U8 *placeholder, Bool secr
 }
 
 // A selectable tile: a title and a short description under it.
-U0 Choice(App *a, I64 x, I64 y, I64 w, I64 h, U8 *title, U8 *desc, Bool on, U32 dot, I64 id, I64 arg)
+U0 Choice(App *a, I64 x, I64 y, I64 w, I64 h, U8 *title, U8 *desc, Bool on, U32 dot, I64 id, I64 arg, I64 glyph = -1)
 {
   Canvas *c = a->cv;
   U32 bg = C_BG, border = C_LINE2;
@@ -983,7 +1061,10 @@ U0 Choice(App *a, I64 x, I64 y, I64 w, I64 h, U8 *title, U8 *desc, Bool on, U32 
   }
   Box(c, x, y, w, h, 6, bg, border);
   I64 tx = x + 12;
-  if (dot != 0) {
+  if (glyph >= 0) {
+    Icon(a, glyph, x + 20, y + 18, 16, C_TEXT);
+    tx = x + 34;
+  } else if (dot != 0) {
     Dot(c, x + 16, y + 18, 8, dot);
     tx = x + 26;
   }
@@ -1042,7 +1123,8 @@ U0 DrawSide(App *a)
       f = F_SEMI;
       fg = C_TEXT;
     }
-    TextMid(c, f, 24, y + 18, g_view_names[v], fg);
+    Icon(a, g_view_glyph[v], 33, y + 18, 18, fg);
+    TextMid(c, f, 52, y + 18, g_view_names[v], fg);
     U8 badge[24];
     badge[0] = 0;
     U32 bcol = C_FAINT;
@@ -1114,7 +1196,7 @@ U0 DrawTop(App *a)
   Input(a, FLD_SEARCH, CX0, 14, 220, 36, "Search  (Ctrl+F)");
 
   I64 phase = IncidentPhase(a);
-  I64 x = CX0 + 236, w = 104;
+  I64 x = CX0 + 236, w = 114;
   for (I64 p = 1; p <= 4; p++) {
     U32 bg = C_BG, border = C_LINE, fg = C_FAINT;
     if (p < phase) {
@@ -1129,12 +1211,13 @@ U0 DrawTop(App *a)
       border = Mix(0xFFFFFFFF, C_LINE2, 40);
     }
     Box(c, x, 14, w - 4, 36, 6, bg, border);
-    U8 label[24];
-    snprintf(label, 24, "%ld %s", p, g_phase_names[p]);
+    U8 *label = g_phase_names[p];
     I64 f = F_MED;
     if (p == phase)
       f = F_SEMI;
-    TextMid(c, f, x + (w - 4 - TextWidth(c, f, label)) / 2, 32, label, fg);
+    I64 lx = x + (w - 4 - TextWidth(c, f, label) - 20) / 2 + 20;
+    Icon(a, g_phase_glyph[p], lx - 11, 32, 14, fg);
+    TextMid(c, f, lx, 32, label, fg);
     if (p != phase)
       AddHit(a, x, 14, w - 4, 36, H_PHASE, p);
     x += w;
@@ -1144,24 +1227,26 @@ U0 DrawTop(App *a)
 }
 
 // One status light in the control panel.
-U0 Light(App *a, I64 y, U8 *label, U8 *state, U32 color)
+U0 Light(App *a, I64 g, I64 y, U8 *label, U8 *state, U32 color)
 {
   Canvas *c = a->cv;
-  Dot(c, (g_cw - PANEL_W) + 28, y, 12, color);
+  Icon(a, g, (g_cw - PANEL_W) + 28, y, 18, color);
   TextMid(c, F_BODY, (g_cw - PANEL_W) + 44, y, label, C_MUTED);
   TextMid(c, F_SEMI, g_cw - 20 - TextWidth(c, F_SEMI, state), y, state, LightOf(color));
 }
 
 // A big hardware-style button: a darker lip under the face.
-U0 PanelButton(App *a, I64 y, U8 *label, U8 *sub, U32 face, U32 lip, Bool on, I64 id)
+U0 PanelButton(App *a, I64 g, I64 y, U8 *label, U8 *sub, U32 face, U32 lip, Bool on, I64 id)
 {
   Canvas *c = a->cv;
   I64 x = (g_cw - PANEL_W) + 16, w = PANEL_W - 32;
   U32 fg = C_TEXT, sfg = Mix(C_TEXT, face, 190);
+  I64 lw = TextWidth(c, F_BTN, label), lx = x + (w - lw - 24) / 2 + 24;
   if (!on) {
     // unavailable: an outline, not a dimmed slab that looks broken
     Box(c, x, y, w, 60, 10, C_PANEL, C_LINE2);
-    TextMid(c, F_BTN, x + (w - TextWidth(c, F_BTN, label)) / 2, y + 22, label, C_FAINT);
+    Icon(a, g, lx - 15, y + 22, 18, C_FAINT);
+    TextMid(c, F_BTN, lx, y + 22, label, C_FAINT);
     TextMid(c, F_SMALL, x + (w - TextWidth(c, F_SMALL, sub)) / 2, y + 42, sub, C_FAINT);
     return;
   } else if (Hover(a, x, y, w, 66)) {
@@ -1169,7 +1254,8 @@ U0 PanelButton(App *a, I64 y, U8 *label, U8 *sub, U32 face, U32 lip, Bool on, I6
   }
   Round(c, x, y, w, 66, 10, lip);
   Round(c, x, y, w, 60, 10, face);
-  TextMid(c, F_BTN, x + (w - TextWidth(c, F_BTN, label)) / 2, y + 22, label, fg);
+  Icon(a, g, lx - 15, y + 22, 18, fg);
+  TextMid(c, F_BTN, lx, y + 22, label, fg);
   TextMid(c, F_SMALL, x + (w - TextWidth(c, F_SMALL, sub)) / 2, y + 42, sub, sfg);
   if (on)
     AddHit(a, x, y, w, 66, id);
@@ -1250,7 +1336,7 @@ U0 DrawPanel(App *a)
       I64 want = RequestedPhase(AlertText(alert->body));
       U8 move[32];
       snprintf(move, 32, "Move to %s", g_phase_names[want]);
-      Button(a, x + 14, y + box_h - 78, w - 28, 30, move, BTN_PRIMARY, H_PHASE, want);
+      Button(a, x + 14, y + box_h - 78, w - 28, 30, move, BTN_PRIMARY, H_PHASE, want, g_phase_glyph[want]);
       Button(a, x + 14, y + box_h - 40, w - 28, 30, "Acknowledge", BTN_GHOST, H_ACK);
     } else {
       Button(a, x + 14, y + box_h - 40, w - 28, 30, "Acknowledge", BTN_GHOST, H_ACK);
@@ -1261,19 +1347,19 @@ U0 DrawPanel(App *a)
   I64 y0 = y;
   if (admin) {
     if (cut)
-      PanelButton(a, y, "NETWORK CUT", "this machine is offline", C_RED_BTN, C_RED_DK, FALSE, H_CUT);
+      PanelButton(a, G_GLOBEOFF, y, "NETWORK CUT", "this machine is offline", C_RED_BTN, C_RED_DK, FALSE, H_CUT);
     else
-      PanelButton(a, y, "CUT NETWORK", "press twice: take this machine offline", C_RED_BTN, C_RED_DK, TRUE, H_CUT);
+      PanelButton(a, G_GLOBEOFF, y, "CUT NETWORK", "press twice: take this machine offline", C_RED_BTN, C_RED_DK, TRUE, H_CUT);
     y += 82;
     if (cut)
-      PanelButton(a, y, "RESTORE NETWORK", "after backups and cleanup", C_GREEN_BTN, C_GREEN_DK, TRUE, H_RESTORE);
+      PanelButton(a, G_GLOBE, y, "RESTORE NETWORK", "after backups and cleanup", C_GREEN_BTN, C_GREEN_DK, TRUE, H_RESTORE);
     else
-      PanelButton(a, y, "RESTORE NETWORK", "internet is on", C_GREEN_BTN, C_GREEN_DK, FALSE, H_RESTORE);
+      PanelButton(a, G_GLOBE, y, "RESTORE NETWORK", "internet is on", C_GREEN_BTN, C_GREEN_DK, FALSE, H_RESTORE);
   } else {
     if (cut)
-      PanelButton(a, y, "RESTORE NETWORK", "bring this machine back online", C_GREEN_BTN, C_GREEN_DK, TRUE, H_RESTORE);
+      PanelButton(a, G_GLOBE, y, "RESTORE NETWORK", "bring this machine back online", C_GREEN_BTN, C_GREEN_DK, TRUE, H_RESTORE);
     else
-      PanelButton(a, y, "ALERT THE MANAGER", "their panel buzzes", C_RED_BTN, C_RED_DK, TRUE,
+      PanelButton(a, G_BELL, y, "ALERT THE MANAGER", "their panel buzzes", C_RED_BTN, C_RED_DK, TRUE,
                   H_ALERT_MGR);
     y += 82;
     // Where the kill switch is, and what state it's in.
@@ -1303,22 +1389,22 @@ U0 DrawPanel(App *a)
   Text(c, F_SEMI, x, y, "Status", C_MUTED);
   y += 30;
   if (cut)
-    Light(a, y, "Internet", "CUT", C_RED);
+    Light(a, G_GLOBEOFF, y, "Internet", "CUT", C_RED);
   else
-    Light(a, y, "Internet", "ON", C_GREEN);
+    Light(a, G_GLOBE, y, "Internet", "ON", C_GREEN);
   y += 32;
   I64 online = OnlineCount(a);
   if (a->link.fd < 0)
-    Light(a, y, "Relay link", "NONE", C_RED);
+    Light(a, G_RELAY, y, "Relay link", "NONE", C_RED);
   else if (online == 0)
-    Light(a, y, "Relay link", "ALONE", C_AMBER);
+    Light(a, G_RELAY, y, "Relay link", "ALONE", C_AMBER);
   else
-    Light(a, y, "Relay link", "OK", C_GREEN);
+    Light(a, G_RELAY, y, "Relay link", "OK", C_GREEN);
   y += 32;
   if (ProblemCount(a) > 0)
-    Light(a, y, "Log integrity", "BROKEN", C_RED);
+    Light(a, G_CHAIN, y, "Log integrity", "BROKEN", C_RED);
   else
-    Light(a, y, "Log integrity", "OK", C_GREEN);
+    Light(a, G_CHAIN, y, "Log integrity", "OK", C_GREEN);
   y += 32;
   Clock clocks[RULES];
   I64 nclocks = Deadlines(a->st->log, clocks);
@@ -1326,20 +1412,20 @@ U0 DrawPanel(App *a)
   if (nclocks > 0)
     left = clocks[0].due - now;
   if (left < 72 * 3600)
-    Light(a, y, "Deadlines", "URGENT", C_RED);
+    Light(a, G_CLOCK, y, "Deadlines", "URGENT", C_RED);
   else if (left < 7 * 86400)
-    Light(a, y, "Deadlines", "THIS WEEK", C_AMBER);
+    Light(a, G_CLOCK, y, "Deadlines", "THIS WEEK", C_AMBER);
   else if (nclocks > 0)
-    Light(a, y, "Deadlines", "RUNNING", C_CYAN);
+    Light(a, G_CLOCK, y, "Deadlines", "RUNNING", C_CYAN);
   else
-    Light(a, y, "Deadlines", "NONE", C_GREEN);
+    Light(a, G_CLOCK, y, "Deadlines", "NONE", C_GREEN);
 
   HLine(c, (g_cw - PANEL_W) + 1, g_ch - 64, PANEL_W - 1, C_LINE);
   Bool lock_armed = a->lock_armed != 0 && now - a->lock_armed <= 3;
   U8 *lock = "Lock station  (F12 twice)";
   if (lock_armed)
     lock = "Press again to lock";
-  Button(a, x, g_ch - 50, w, 34, lock, BTN_GHOST, H_LOCK);
+  Button(a, x, g_ch - 50, w, 34, lock, BTN_GHOST, H_LOCK, 0, G_LOCK);
 }
 
 // A short notice after an action, for six seconds, in the free space at
@@ -1370,12 +1456,15 @@ U0 DrawComposer(App *a)
   for (I64 k = 0; k < 3; k++) {
     I64 kind = KIND_NOTE;
     U8 *label = "Note";
+    I64 g = G_PENCIL;
     if (k == 1) {
       kind = KIND_CHAT;
       label = "Chat";
+      g = G_CHAT;
     } else if (k == 2) {
       kind = KIND_ALERT;
       label = "Alert";
+      g = G_BELL;
     }
     Bool on = a->kind == kind;
     U32 bg = C_SURFACE, fg = C_MUTED;
@@ -1385,13 +1474,15 @@ U0 DrawComposer(App *a)
     } else if (on) {
       bg = C_RAISED;
       fg = C_TEXT;
-    } else if (Hover(a, bx, y + 8, 64, 36)) {
+    } else if (Hover(a, bx, y + 8, 82, 36)) {
       fg = C_TEXT;
     }
-    Round(c, bx, y + 8, 64, 36, 6, bg);
-    TextMid(c, F_SEMI, bx + (64 - TextWidth(c, F_SEMI, label)) / 2, y + 26, label, fg);
-    AddHit(a, bx, y + 8, 64, 36, H_KIND, kind);
-    bx += 68;
+    Round(c, bx, y + 8, 82, 36, 6, bg);
+    I64 lx = bx + (82 - TextWidth(c, F_SEMI, label) - 20) / 2 + 20;
+    Icon(a, g, lx - 12, y + 26, 14, fg);
+    TextMid(c, F_SEMI, lx, y + 26, label, fg);
+    AddHit(a, bx, y + 8, 82, 36, H_KIND, kind);
+    bx += 86;
   }
   U8 hint[96];
   if (a->kind == KIND_NOTE)
@@ -1427,6 +1518,10 @@ I64 LogRow(App *a, Entry *e, U8 *text, I64 x, I64 y, I64 w, Bool draw, I64 max_l
   Text(c, F_SEMI, x + 66, y + 9, name, C_TEXT, 84);
   if (badge)
     Badge(a, x + 156, y + 18, tag, tc);
+  else if (StrCmp(tag, "chat") == 0)
+    Icon(a, G_CHAT, x + 166, y + 18, 16, C_FAINT);
+  else if (StrCmp(tag, "team") == 0)
+    Icon(a, G_TEAM, x + 166, y + 18, 16, C_FAINT);
   else
     Text(c, F_SMALL, x + 158, y + 10, tag, C_FAINT, 100);
   U32 fg = C_TEXT;
@@ -1582,7 +1677,8 @@ U0 DrawOverview(App *a)
         snprintf(cnt, 24, "%s records", num);
       }
       snprintf(detail, 64, "%s  %s", as->type, cnt);
-      Text(c, F_SMALL, CX0 + 196, ry + 8, detail, C_MUTED, lw - 196 - 130);
+      Icon(a, TypeGlyph(as->type), CX0 + 202, ry + 15, 15, C_MUTED);
+      Text(c, F_SMALL, CX0 + 216, ry + 8, detail, C_MUTED, lw - 216 - 130);
       Badge(a, CX0 + lw - 16 - TextWidth(c, F_LABEL, as->status) - 14, ry + 16, as->status, StatusColor(as->status));
       ry += 32;
     }
@@ -1603,8 +1699,8 @@ U0 DrawOverview(App *a)
       StrCpy(line, "1 alert for the manager");
     else
       snprintf(line, 80, "%ld alerts for the manager", UnackedAlerts(a));
-    Dot(c, rx + 20, ry + 20, 8, C_RED);
-    Text(c, F_SEMI, rx + 32, ry + 11, line, C_RED_FG, rw - 172);
+    Icon(a, G_BELL, rx + 20, ry + 20, 16, C_RED);
+    Text(c, F_SEMI, rx + 36, ry + 11, line, C_RED_FG, rw - 172);
     Button(a, rx + rw - 136, ry + 4, 120, 30, "Acknowledge", BTN_GHOST, H_ACK);
     ry += 40;
     items++;
@@ -1615,32 +1711,32 @@ U0 DrawOverview(App *a)
       StrCpy(line, "1 suspicious server event to check");
     else
       snprintf(line, 80, "%ld suspicious server events to check", a->sus_open);
-    Dot(c, rx + 20, ry + 20, 8, C_RED);
-    Text(c, F_SEMI, rx + 32, ry + 11, line, C_RED_FG, rw - 140);
+    Icon(a, G_SERVER, rx + 20, ry + 20, 16, C_RED);
+    Text(c, F_SEMI, rx + 36, ry + 11, line, C_RED_FG, rw - 140);
     Button(a, rx + rw - 92, ry + 4, 76, 30, "Review", BTN_GHOST, H_NAV, V_SERVER);
     ry += 40;
     items++;
   }
   Entry *mnet = ManagerNetwork(a);
   if (IsCut(a)) {
-    Dot(c, rx + 20, ry + 20, 8, C_RED);
-    Text(c, F_BODY, rx + 32, ry + 11, "Internet cut on this machine. ARK runs on the relay.", C_TEXT, rw - 48);
+    Icon(a, G_GLOBEOFF, rx + 20, ry + 20, 16, C_RED);
+    Text(c, F_BODY, rx + 36, ry + 11, "Internet cut on this machine. ARK runs on the relay.", C_TEXT, rw - 48);
     ry += 40;
     items++;
   } else if (!IsAdmin(a->st) && mnet != NULL && StrNCmp(mnet->body, "Cut", 3) == 0) {
     U8 boss[NAME_MAX], line[128];
     NameOf(a->st->log, mnet->author, boss);
     snprintf(line, 128, "%s's laptop is off the internet.", boss);
-    Dot(c, rx + 20, ry + 20, 8, C_RED);
-    Text(c, F_BODY, rx + 32, ry + 11, line, C_TEXT, rw - 48);
+    Icon(a, G_GLOBEOFF, rx + 20, ry + 20, 16, C_RED);
+    Text(c, F_BODY, rx + 36, ry + 11, line, C_TEXT, rw - 48);
     ry += 40;
     items++;
   }
   if (a->team.join_pending && IsAdmin(a->st)) {
     U8 line[80];
     snprintf(line, 80, "%s asks to join the team", a->team.join_name);
-    Dot(c, rx + 20, ry + 20, 8, C_CYAN);
-    Text(c, F_BODY, rx + 32, ry + 11, line, C_TEXT, rw - 130);
+    Icon(a, G_TEAM, rx + 20, ry + 20, 16, C_CYAN);
+    Text(c, F_BODY, rx + 36, ry + 11, line, C_TEXT, rw - 130);
     Button(a, rx + rw - 92, ry + 4, 76, 30, "Review", BTN_GHOST, H_NAV, V_TEAM);
     ry += 40;
     items++;
@@ -1649,8 +1745,8 @@ U0 DrawOverview(App *a)
   if (problems > 0) {
     U8 line[80];
     snprintf(line, 80, "%ld log problems: entries failed a check", problems);
-    Dot(c, rx + 20, ry + 20, 8, C_RED);
-    Text(c, F_BODY, rx + 32, ry + 11, line, C_RED_FG, rw - 48);
+    Icon(a, G_CHAIN, rx + 20, ry + 20, 16, C_RED);
+    Text(c, F_BODY, rx + 36, ry + 11, line, C_RED_FG, rw - 48);
     ry += 40;
     items++;
   }
@@ -1661,8 +1757,8 @@ U0 DrawOverview(App *a)
     U8 line[96], rem[24];
     RemainingText(left, rem);
     snprintf(line, 96, "%s: %s", g_rule_who[clocks[i].rule], rem);
-    Dot(c, rx + 20, ry + 20, 8, C_AMBER);
-    Text(c, F_BODY, rx + 32, ry + 11, line, C_TEXT, rw - 48);
+    Icon(a, G_CLOCK, rx + 20, ry + 20, 16, C_AMBER);
+    Text(c, F_BODY, rx + 36, ry + 11, line, C_TEXT, rw - 48);
     ry += 40;
     items++;
   }
@@ -1674,8 +1770,8 @@ U0 DrawOverview(App *a)
       continue;
     U8 line[96];
     snprintf(line, 96, "%s: record count unknown", as->name);
-    Dot(c, rx + 20, ry + 20, 8, C_AMBER);
-    Text(c, F_BODY, rx + 32, ry + 11, line, C_TEXT, rw - 48);
+    Icon(a, G_SCOPE, rx + 20, ry + 20, 16, C_AMBER);
+    Text(c, F_BODY, rx + 36, ry + 11, line, C_TEXT, rw - 48);
     ry += 40;
     items++;
   }
@@ -1858,7 +1954,8 @@ U0 DrawServerPage(App *a)
     if (StrCmp(ev.user, "root") == 0)
       wc = C_AMBER_FG;
     TextMid(c, F_SEMI, cu, cy, who, wc, ct - cu - 10);
-    TextMid(c, F_SMALL, ct, cy, g_ev_label[ev.source], C_MUTED, cd - ct - 10);
+    Icon(a, g_ev_glyph[ev.source], ct + 7, cy, 15, C_MUTED);
+    TextMid(c, F_SMALL, ct + 20, cy, g_ev_label[ev.source], C_MUTED, cd - ct - 30);
     U32 dc = C_TEXT;
     if (a->risk[idx] == RISK_SUS)
       dc = C_RED_FG;
@@ -1948,7 +2045,7 @@ U0 DrawServerPage(App *a)
   } else if (IsAdmin(a->st)) {
     TextRight(c, F_SMALL, CX0 + (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 20, dy + 22, "Your team reports events to you.", C_FAINT);
   } else {
-    Button(a, bx, dy + 14, bw, 36, "Report to manager", BTN_RED, H_REPORT, a->selected);
+    Button(a, bx, dy + 14, bw, 36, "Report to manager", BTN_RED, H_REPORT, a->selected, G_BELL);
   }
 }
 
@@ -1988,7 +2085,8 @@ U0 DrawScopeForm(App *a, I64 y)
   Text(c, F_SEMI, x + 20, fy, "What kind of data it holds", C_TEXT);
   I64 tw = (w - 40 - 4 * 8) / 5;
   for (I64 i = 0; i < 5; i++)
-    Choice(a, x + 20 + i * (tw + 8), fy + 22, tw, 54, g_data_types[i], g_type_short[i], a->scope_type == i, 0, H_TYPE, i);
+    Choice(a, x + 20 + i * (tw + 8), fy + 22, tw, 54, g_data_types[i], g_type_short[i], a->scope_type == i, 0, H_TYPE, i,
+           g_type_glyph[i]);
 
   fy += 92;
   Text(c, F_SEMI, x + 20, fy, "How many people", C_TEXT);
@@ -2043,7 +2141,8 @@ U0 DrawScopePage(App *a)
     Asset *as = &a->assets[i];
     I64 cy = ry + 22;
     TextMid(c, F_SEMI, CX0 + cols[0], cy, as->name, C_TEXT, 210);
-    TextMid(c, F_BODY, CX0 + cols[1], cy, as->type, C_TEXT);
+    Icon(a, TypeGlyph(as->type), CX0 + cols[1] + 8, cy, 16, C_MUTED);
+    TextMid(c, F_BODY, CX0 + cols[1] + 22, cy, as->type, C_TEXT);
     U8 *where = as->where;
     if (StrCmp(where, "-") == 0)
       where = "none";
@@ -2162,7 +2261,7 @@ U0 DrawTeamPage(App *a)
     BigCode(a, CX0 + 20, y + 70, JoinCode(a->team.join_pk), C_CYAN_FG);
     Text(c, F_BODY, CX0 + 300, y + 76, "Approve only if it matches exactly.", C_TEXT);
     Text(c, F_SMALL, CX0 + 300, y + 98, "A different code means a different device is asking. Don't approve it.", C_MUTED);
-    Button(a, CX0 + (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 20 - 150, y + 20, 150, 40, "Approve", BTN_GREEN, H_APPROVE);
+    Button(a, CX0 + (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 20 - 150, y + 20, 150, 40, "Approve", BTN_GREEN, H_APPROVE, 0, G_TEAM);
     y += 166;
   }
   CollectMembers(a);
@@ -2278,11 +2377,7 @@ U0 DrawNetworkPage(App *a)
     y += 76;
   }
 
-  if (!a->icons_loaded) {
-    LoadImage(c, "laptop", &a->icon_laptop);
-    LoadImage(c, "relay", &a->icon_relay);
-    a->icons_loaded = TRUE;
-  }
+  LoadIcons(a);
   I64 cw = g_cw - SIDE_W - PANEL_W - 2 * PAD;
   Card(a, CX0, y, cw, 232);
   I64 isz = 88, iy = y + 22, ty = iy + isz + 12;
@@ -2415,8 +2510,27 @@ U8 *g_guide_phases[] = {
   "CONTAIN    stop the spread: isolate, block, reset",
   "ERADICATE  remove the attacker and their tools",
   "RECOVER    restore systems, watch for a return",
-  "Clicking a phase at the top logs the change for all.", NULL
+  "The manager sets it. An analyst's click asks them.", NULL
 };
+
+// Symbol key: glyph and what it stands for.
+I64 g_key_glyph[8] = {G_TERMINAL, G_SHIELD, G_LOGIN, G_LOCKX, G_GLOBE, G_ACCOUNT, G_GLOBEOFF, G_BELL};
+U8 *g_key_text[8] = {"command", "sudo", "login", "failed login", "web request", "account change", "internet cut",
+                     "alert"};
+
+U0 SymbolKey(App *a, I64 x, I64 *y, I64 w)
+{
+  Canvas *c = a->cv;
+  Text(c, F_SEMI, x, *y, "Symbols", C_TEXT);
+  *y += 30;
+  I64 cw = w / 2;
+  for (I64 i = 0; i < 8; i++) {
+    I64 cx = x + (i % 2) * cw, cy = *y + (i / 2) * 26;
+    Icon(a, g_key_glyph[i], cx + 8, cy + 2, 16, C_MUTED);
+    TextMid(c, F_BODY, cx + 26, cy + 2, g_key_text[i], C_MUTED, cw - 30);
+  }
+  *y += 4 * 26 + 10;
+}
 U8 *g_guide_badges[] = {
   "CHAIN BROKEN  an entry before it is missing or changed",
   "NOT A MEMBER  written by someone never admitted",
@@ -2456,7 +2570,19 @@ U0 DrawGuidePage(App *a)
   GuideBlock(a, CX0 + 20, &ly, hw - 40, "What ARK is", g_guide_what);
   GuideBlock(a, CX0 + 20, &ly, hw - 40, "Server log", g_guide_server);
   GuideBlock(a, CX0 + 20, &ly, hw - 40, "Writing", g_guide_write);
-  GuideBlock(a, CX0 + 20, &ly, hw - 40, "Phases", g_guide_phases);
+  Text(a->cv, F_SEMI, CX0 + 20, ly, "Phases", C_TEXT);
+  ly += 24;
+  for (I64 i = 0; g_guide_phases[i] != NULL; i++) {
+    I64 tx = CX0 + 20;
+    if (i < 4) {
+      Icon(a, g_phase_glyph[i + 1], tx + 7, ly + 9, 14, LightOf(PhaseColor(i + 1)));
+      tx += 22;
+    }
+    RichText(a->cv, F_BODY, tx, ly, g_guide_phases[i], StrLen(g_guide_phases[i]), C_MUTED);
+    ly += 20;
+  }
+  ly += 18;
+  SymbolKey(a, CX0 + 20, &ly, hw - 40);
   GuideBlock(a, CX0 + hw + 36, &ry, hw - 40, "Colors", g_guide_colors);
   GuideBlock(a, CX0 + hw + 36, &ry, hw - 40, "Warning badges", g_guide_badges);
   GuideBlock(a, CX0 + hw + 36, &ry, hw - 40, "Keys", g_guide_keys);
@@ -2992,7 +3118,7 @@ U0 DrawReportPage(App *a)
   else if (a->report_state == RS_DONE)
     Button(a, CX0 + cw - 180, y + 20, 160, 36, "Request again", BTN_GHOST, H_WRITE);
   else
-    Button(a, CX0 + cw - 180, y + 20, 160, 36, "Request report", BTN_PRIMARY, H_WRITE);
+    Button(a, CX0 + cw - 180, y + 20, 160, 36, "Request report", BTN_PRIMARY, H_WRITE, 0, G_REPORT);
 
   y += 92;
   I64 h = g_ch - 20 - y;

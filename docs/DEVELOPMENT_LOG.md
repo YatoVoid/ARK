@@ -126,3 +126,4 @@ A Report page (F7) writes an after-incident report for the company: what happene
 - The Network page diagram uses drawn icons (a laptop and a switch) instead of bordered boxes. They're SVG in `assets/icons`, converted to raw RGBA by `tools/make-icons.py`, because the station has no PNG decoder and SDL_image isn't linked.
 - The relay hub runs on a laptop as well as on the UNO Q, so two windows can be tried with no hardware. `test_link` passed through a local hub.
 - Headings switched to Fira Sans Condensed; body text stays Inter.
+- Symbols where people used to read a label: each page, phase, server event type and data type, the panel buttons, the status lights and the Needs attention list. They're white SVG shapes tinted by the station, so a bell is red on an alert and a clock is yellow on a near deadline. A crossed-out plug for the cut looked like a lightning bolt at button size; a globe with a slash replaced it. The Guide has a Symbols key.

@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 48 48">
+<mask id="m"><rect width="48" height="48" fill="#fff"/><ellipse cx="24" cy="24" rx="8" ry="19" fill="none" stroke="#000" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.6"/><path d="M5 24h38M8 15h32M8 33h32" fill="none" stroke="#000" stroke-linecap="round" stroke-linejoin="round" stroke-width="2.6"/><path d="M7 43L43 7" fill="none" stroke="#000" stroke-linecap="round" stroke-linejoin="round" stroke-width="9"/></mask>
+<g mask="url(#m)"><circle cx="24" cy="24" r="19" fill="#fff"/><path d="M7 43L43 7" fill="none" stroke="#fff" stroke-linecap="round" stroke-linejoin="round" stroke-width="3.4"/></g>
+</svg>

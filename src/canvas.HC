@@ -437,8 +437,9 @@ Bool LoadImage(Canvas *c, U8 *name, Image *img)
 }
 
 // Draws the image into a size x size unit square, box-filtered so it stays
-// smooth at any window scale. Missing images draw nothing.
-U0 DrawImage(Canvas *c, Image *img, I64 x, I64 y, I64 size)
+// smooth at any window scale. With a tint, only the image's alpha is used,
+// so a white glyph takes any colour. Missing images draw nothing.
+U0 DrawImage(Canvas *c, Image *img, I64 x, I64 y, I64 size, U32 tint = 0)
 {
   if (img->rgba == NULL)
     return;
@@ -462,6 +463,8 @@ U0 DrawImage(Canvas *c, Image *img, I64 x, I64 y, I64 size)
       if (al == 0)
         continue;
       U32 col = 0xFF000000 | ((r / al) << 16) | ((g / al) << 8) | (b / al);
+      if (tint != 0)
+        col = tint;
       Blend(c, x0 + dx, y0 + dy, col, al / cnt);
     }
   }

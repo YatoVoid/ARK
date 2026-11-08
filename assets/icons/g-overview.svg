@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 48 48">
+<mask id="m"><rect width="48" height="48" fill="#fff"/></mask>
+<g mask="url(#m)"><rect x="6" y="6" width="16" height="20" rx="3" fill="#fff"/><rect x="26" y="6" width="16" height="12" rx="3" fill="#fff"/><rect x="26" y="22" width="16" height="20" rx="3" fill="#fff"/><rect x="6" y="30" width="16" height="12" rx="3" fill="#fff"/></g>
+</svg>
