@@ -1,6 +1,6 @@
 # Relay LED matrix
 
-The animation on the UNO Q's 13x8 LED matrix (8 brightness levels): waves, then `</>` sinks into the flood, the ark rises from it, its three windows light up one by one as people come aboard, and a dove crosses when the rain stops. About 14 seconds, looping.
+The animation on the UNO Q's 13x8 LED matrix (8 brightness levels): waves, then the word ARK pops up out of them and sinks back, the ark rises from the water, its three windows light up one by one as people come aboard, and a dove crosses when the rain stops. About 14 seconds, looping.
 
 `frames.py` draws every frame from a few small pictures (the ark, the glyphs, the wave pattern) and writes `sketch/frames.h`. Change the pictures there, not the header.
 

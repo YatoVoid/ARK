@@ -2,7 +2,7 @@
 
 Writes frames.h for the sketch, and with --preview a GIF to look at.
 
-Story: waves; "</>" appears over them, sinks into the water; the ark rises
+Story: waves; the word ARK pops up out of them, then sinks back; the ark rises
 out of it and rides the waves through rain while its windows light up one
 by one (people coming aboard); the rain stops and a dove crosses.
 """
@@ -24,9 +24,9 @@ ARK = [
 WINDOWS = [(4, 4), (4, 6), (4, 8)]
 
 GLYPHS = {
-    "<": ["..#", ".#.", "#..", ".#.", "..#"],
-    "/": ["..#", "..#", ".#.", "#..", "#.."],
-    ">": ["#..", ".#.", "..#", ".#.", "#.."],
+    "A": [".#.", "#.#", "###", "#.#", "#.#"],
+    "R": ["##.", "#.#", "##.", "#.#", "#.#"],
+    "K": ["#.#", "#.#", "##.", "#.#", "#.#"],
 }
 
 WAVE = [7, 4, 1, 4]       # bottom row, scrolls one step per frame
@@ -63,9 +63,9 @@ def ark(f, dy, lit):
                 f[y][x] = int(ch)
 
 
-def code(f, dy, level):
+def word(f, dy, level):
     x0 = 1
-    for ch in "</>":
+    for ch in "ARK":
         for r, row in enumerate(GLYPHS[ch]):
             for c, p in enumerate(row):
                 if p == "#":
@@ -94,12 +94,13 @@ def build():
 
     for _ in range(6):
         f = blank(); waves(f, t); add(f, 140)
-    for level in range(1, 8):
-        f = blank(); code(f, 0, level); waves(f, t); add(f, 70)
-    for _ in range(10):
-        f = blank(); code(f, 0, 7); waves(f, t); add(f, 140)
+    # Pops up out of the water with a one-row overshoot, then settles.
+    for dy in [6, 4, 2, 0, -1, 0]:
+        f = blank(); word(f, dy, 7); waves(f, t); add(f, 70)
+    for _ in range(12):
+        f = blank(); word(f, 0, 7); waves(f, t); add(f, 140)
     for dy in range(1, 7):
-        f = blank(); code(f, dy, 7 - dy); waves(f, t); add(f, 110)
+        f = blank(); word(f, dy, 7); waves(f, t); add(f, 110)
     for dy in range(7, -1, -1):
         f = blank(); ark(f, dy, [0, 0, 0]); waves(f, t); add(f, 120)
 

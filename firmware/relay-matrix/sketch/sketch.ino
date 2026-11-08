@@ -1,5 +1,5 @@
-// ARK animation for the Arduino UNO Q's 13x8 LED matrix: code sinks into
-// the flood, the ark rises, its windows light up as people come aboard,
+// ARK animation for the Arduino UNO Q's 13x8 LED matrix: the word ARK
+// rises from the flood and sinks, the ark rises, its windows light up,
 // and a dove crosses once the rain stops. Frames come from frames.py.
 
 #include <Arduino_LED_Matrix.h>
