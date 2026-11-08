@@ -34,6 +34,7 @@
 #define KIND_EVENT      8   // body: source|user|host|detail, see events.HC
 #define KIND_ROLE       9   // body: 32-byte public key, then the new role; manager only
 #define KIND_REMOVE    10   // body: 32-byte public key; manager only, followed by a new team key
+#define KIND_COMMAND   11   // body: text, in the Command channel
 
 #define PHASE_NONE      0
 #define PHASE_DETECT    1
@@ -45,6 +46,7 @@
 #define ST_BAD_CHAIN   1   // prev hash doesn't match, or an earlier entry is missing
 #define ST_NOT_MEMBER  2   // author wasn't admitted by the admin
 #define ST_FORK        3   // author signed two different entries with the same seq
+#define ST_NOT_ALLOWED 4   // the author's role may not write this kind of entry
 
 #define HEAD_BYTES  90
 #define BODY_MAX    1024
@@ -203,6 +205,109 @@ Bool RemovedOnce(Log *log, U8 *pk)
   return FALSE;
 }
 
+// Roles. The admin is the incident lead. Everyone else gets one of these
+// when admitted, and the lead can change it later. Security and IT work
+// the floor; the rest talk in the Command channel. Someone admitted
+// without a role counts as floor.
+#define ROLES 7
+U8 *g_roles[ROLES] = {"Security", "IT", "Legal", "Executive", "Comms", "Insurer", "HR"};
+
+#define CAN_FLOOR_POST  1    // notes, floor chat, scope, server events, phase requests
+#define CAN_FLOOR_READ  2    // the Floor channel
+#define CAN_CMD_POST    4    // the Command channel
+#define CAN_CMD_READ    8
+#define CAN_SERVER_READ 16   // the Server log page
+#define CAN_REPORT      32   // Request report
+#define CAN_LEAD        64   // phase, kill switch, admitting, roles, removal
+#define CAN_ALL         127
+#define FLOOR_CAPS      (CAN_FLOOR_POST | CAN_FLOOR_READ | CAN_SERVER_READ | CAN_REPORT)
+
+I64 g_role_caps[ROLES] = {
+  FLOOR_CAPS,                                                                        // Security
+  FLOOR_CAPS,                                                                        // IT
+  CAN_CMD_POST | CAN_CMD_READ | CAN_FLOOR_READ | CAN_SERVER_READ | CAN_REPORT,       // Legal
+  CAN_CMD_POST | CAN_CMD_READ | CAN_FLOOR_READ | CAN_SERVER_READ | CAN_REPORT,       // Executive
+  CAN_CMD_POST | CAN_CMD_READ | CAN_REPORT,                                          // Comms
+  CAN_CMD_POST | CAN_CMD_READ | CAN_SERVER_READ,                                     // Insurer
+  CAN_CMD_POST | CAN_CMD_READ | CAN_REPORT                                           // HR
+};
+
+// The role pk was admitted with: the text after the name in its MEMBER_ADD.
+// The admin is "Incident lead". Empty if none.
+U0 RoleOf(Log *log, U8 *pk, U8 *out)
+{
+  out[0] = 0;
+  if (log->has_admin && Same(pk, log->admin, PK_BYTES)) {
+    StrCpy(out, "Incident lead");
+    return;
+  }
+  for (I64 i = 0; i < log->count; i++) {
+    Entry *e = &log->entries[i];
+    if (e->kind == KIND_MEMBER_ADD && e->status == ST_OK && e->body_len > PK_BYTES &&
+        Same(e->body, pk, PK_BYTES) && log->has_admin && Same(e->author, log->admin, PK_BYTES)) {
+      U8 *nl = strchr(e->body + PK_BYTES, '\n');
+      if (nl != NULL)
+        CopyText(out, nl + 1, 32);
+      return;
+    }
+  }
+}
+
+// pk's role at Lamport time at: the admission role, or the newest ROLE
+// entry from the admin before at.
+U0 RoleAt(Log *log, U8 *pk, I64 at, U8 *out)
+{
+  RoleOf(log, pk, out);
+  if (log->has_admin && Same(pk, log->admin, PK_BYTES))
+    return;
+  I64 best = -1;
+  for (I64 i = 0; i < log->count; i++) {
+    Entry *e = &log->entries[i];
+    I64 lam = e->lamport;
+    if (e->kind == KIND_ROLE && e->status == ST_OK && e->body_len > PK_BYTES && Same(e->body, pk, PK_BYTES) &&
+        log->has_admin && Same(e->author, log->admin, PK_BYTES) && lam < at && lam > best) {
+      best = lam;
+      CopyText(out, e->body + PK_BYTES, 32);
+    }
+  }
+}
+
+U0 RoleNow(Log *log, U8 *pk, U8 *out)
+{
+  RoleAt(log, pk, 0x7FFFFFFFFFFFFFFF, out);
+}
+
+// What pk may do at Lamport time at, as CAN_ bits.
+I64 RoleCaps(Log *log, U8 *pk, I64 at)
+{
+  if (log->has_admin && Same(pk, log->admin, PK_BYTES))
+    return CAN_ALL;
+  U8 role[32];
+  RoleAt(log, pk, at, role);
+  if (role[0] == 0)
+    return FLOOR_CAPS;
+  for (I64 i = 0; i < ROLES; i++)
+    if (StrCmp(role, g_roles[i]) == 0)
+      return g_role_caps[i];
+  return 0;
+}
+
+// May e's author write an entry of this kind, given their role when they
+// wrote it? Alerts to the lead, and a member cutting their own laptop off
+// the network, are open to every member.
+Bool KindAllowed(Log *log, Entry *e)
+{
+  I64 caps = RoleCaps(log, e->author, e->lamport);
+  I64 k = e->kind;
+  if (k == KIND_NOTE || k == KIND_CHAT || k == KIND_SCOPE || k == KIND_EVENT)
+    return (caps & CAN_FLOOR_POST) != 0;
+  if (k == KIND_COMMAND)
+    return (caps & CAN_CMD_POST) != 0;
+  if (k == KIND_GENESIS || k == KIND_MEMBER_ADD || k == KIND_ROLE || k == KIND_REMOVE)
+    return (caps & CAN_LEAD) != 0;
+  return TRUE;
+}
+
 // Is pk a member now?
 Bool IsMember(Log *log, U8 *pk)
 {
@@ -251,11 +356,14 @@ U0 LogCheck(Log *log)
       Entry *e = &log->entries[i];
       if (e->status == ST_OK && e->seq > 1) {
         Entry *before = LogFind(log, e->author, e->seq - 1);
-        if (before != NULL && before->status != ST_OK && before->status != ST_NOT_MEMBER)
+        if (before != NULL && before->status != ST_OK && before->status != ST_NOT_MEMBER &&
+            before->status != ST_NOT_ALLOWED)
           e->status = ST_BAD_CHAIN;
       }
       if (e->status == ST_OK && !IsMemberAt(log, e->author, e->lamport))
         e->status = ST_NOT_MEMBER;
+      if (e->status == ST_OK && !KindAllowed(log, e))
+        e->status = ST_NOT_ALLOWED;
     }
   }
 
@@ -333,5 +441,6 @@ U8 *StatusName(I64 status)
   if (status == ST_BAD_CHAIN) return "CHAIN BROKEN";
   if (status == ST_NOT_MEMBER) return "NOT A MEMBER";
   if (status == ST_FORK) return "FORKED";
+  if (status == ST_NOT_ALLOWED) return "NOT ALLOWED";
   return "?";
 }

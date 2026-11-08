@@ -38,8 +38,10 @@
 #define FILTER_ALL   0
 #define FILTER_NOTE  1
 #define FILTER_CHAT  2
-#define FILTER_SCOPE 3
-#define FILTER_TEAM  4
+#define FILTER_CMD   3
+#define FILTER_SCOPE 4
+#define FILTER_TEAM  5
+#define FILTERS      6
 
 #define SF_ALL       0
 #define SF_SUS       1
@@ -161,14 +163,11 @@ U8 *g_scope_status[5] = {"ENCRYPTED", "EXFILTRATED", "SUSPECTED", "CONTAINED", "
 U8 *g_status_short[5] = {"locked by ransomware", "copied out", "not confirmed yet", "access cut off", "checked, not hit"};
 U8 *g_where_picks[5] = {"TX", "CA", "NY", "EU", "-"};
 U8 *g_where_labels[5] = {"TX", "CA", "NY", "EU", "None"};
-U8 *g_filter_names[5] = {"All", "Notes", "Chat", "Scope", "Team"};
+U8 *g_filter_names[FILTERS] = {"All", "Notes", "Floor", "Command", "Scope", "Team"};
 
-// Stakeholder roles the manager picks from when admitting someone. The
-// manager is always "Incident lead". Colours are identity only, for the
+// Role colours (roles themselves are in log.HC) are identity only, for the
 // avatars, so they stay away from the red/amber/green status colours.
-#define ROLES 6
-U8 *g_roles[ROLES] = {"Security", "IT", "Legal", "Executive", "Comms", "Insurer"};
-U32 g_role_color[ROLES] = {0xFF6FA0E8, 0xFF45B9AE, 0xFFB18AE6, 0xFFD9B56B, 0xFFE07FA8, 0xFF9AA5BE};
+U32 g_role_color[ROLES] = {0xFF6FA0E8, 0xFF45B9AE, 0xFFB18AE6, 0xFFD9B56B, 0xFFE07FA8, 0xFF9AA5BE, 0xFF8FB7C9};
 U8 *g_sfilter_names[5] = {"All", "Suspicious", "Commands", "Logins", "Requests"};
 U8 *g_month[12] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
 U8 *g_wday[7] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
@@ -369,6 +368,7 @@ Bool Ready(App *a)
 
 U0 Send(App *a, U8 *msg, I64 len)
 {
+  TagLink(&a->link, a->st);
   if (len > 0)
     LinkSend(&a->link, msg, len);
 }
@@ -816,6 +816,9 @@ Bool EntryTag(Entry *e, U8 *text, U8 *out, U32 *color)
   } else if (e->kind == KIND_CHAT) {
     StrCpy(out, "chat");
     return FALSE;
+  } else if (e->kind == KIND_COMMAND) {
+    StrCpy(out, "COMMAND");
+    *color = C_AMBER;
   } else {
     StrCpy(out, "team");
     return FALSE;
@@ -823,12 +826,48 @@ Bool EntryTag(Entry *e, U8 *text, U8 *out, U32 *color)
   return TRUE;
 }
 
+I64 MyCaps(App *a)
+{
+  return RoleCaps(a->st->log, a->st->pk, 0x7FFFFFFFFFFFFFFF);
+}
+
+Bool Can(App *a, I64 cap)
+{
+  return (MyCaps(a) & cap) != 0;
+}
+
+// Floor chat and the Command channel are shown only to roles that may
+// read them. Every member holds the team key, so this is need to know on
+// screen, not encryption.
+Bool Visible(App *a, Entry *e)
+{
+  if (e->kind == KIND_CHAT)
+    return Can(a, CAN_FLOOR_READ);
+  if (e->kind == KIND_COMMAND)
+    return Can(a, CAN_CMD_READ);
+  return TRUE;
+}
+
+// May this station post kind from the composer?
+Bool CanPost(App *a, I64 kind)
+{
+  if (kind == KIND_NOTE || kind == KIND_CHAT)
+    return Can(a, CAN_FLOOR_POST);
+  if (kind == KIND_COMMAND)
+    return Can(a, CAN_CMD_POST);
+  return kind == KIND_ALERT;
+}
+
 Bool PassesFilter(App *a, Entry *e, U8 *text)
 {
+  if (!Visible(a, e))
+    return FALSE;
   I64 f = a->filter;
   if (f == FILTER_NOTE && e->kind != KIND_NOTE)
     return FALSE;
   if (f == FILTER_CHAT && e->kind != KIND_CHAT)
+    return FALSE;
+  if (f == FILTER_CMD && e->kind != KIND_COMMAND)
     return FALSE;
   if (f == FILTER_SCOPE && e->kind != KIND_SCOPE)
     return FALSE;
@@ -1144,6 +1183,8 @@ U0 DrawSide(App *a)
   CollectAssets(a);
   y = 176;
   for (I64 v = 0; v < VIEWS; v++) {
+    if (v == V_SERVER && !Can(a, CAN_SERVER_READ))
+      continue;
     if (v == V_GUIDE)
       y += 14;
     Bool on = a->view == v;
@@ -1481,6 +1522,23 @@ U0 DrawFlash(App *a)
 
 // ---- composer -------------------------------------------------------------
 
+// A member whose incident has gone quiet while the lead of a different one
+// is on the relay: almost always a manager who cleared their station and
+// started again. Only the person at this laptop can fix it, by clearing.
+Bool OnOldIncident(App *a)
+{
+  Log *log = a->st->log;
+  I64 now = time(NULL);
+  if (!Ready(a) || !log->has_admin || IsAdmin(a->st) || now - a->team.other_lead_at > ONLINE_SECS)
+    return FALSE;
+  for (I64 i = 0; i < a->team.peer_count; i++) {
+    Peer *p = &a->team.peers[i];
+    if (Same(p->pk, log->admin, PK_BYTES) && now - p->heard <= ONLINE_SECS)
+      return FALSE;
+  }
+  return TRUE;
+}
+
 // Admitted once, then removed by the manager.
 Bool Removed(App *a)
 {
@@ -1498,21 +1556,45 @@ U0 DrawComposer(App *a)
     TextMid(c, F_SEMI, x + 20, y + COMPOSE_H / 2, "The manager removed you from this team. You can read what you already had, but nothing new reaches you.", C_RED_FG, (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 40);
     return;
   }
+  if (OnOldIncident(a)) {
+    I64 bw = (g_cw - SIDE_W - PANEL_W - 2 * PAD);
+    Box(c, x, y, bw, COMPOSE_H, 8, Mix(C_AMBER, C_SURFACE, 30), C_AMBER);
+    TextMid(c, F_SEMI, x + 20, y + 17, "Your manager is running a new incident. This laptop is still on the old one.", LightOf(C_AMBER), bw - 240);
+    TextMid(c, F_SMALL, x + 20, y + 37, "Nothing you send reaches anyone. Clear this station, then Join the new incident.", C_MUTED, bw - 240);
+    U8 *label = "Clear this station";
+    if (a->clear_armed != 0 && time(NULL) - a->clear_armed <= 3)
+      label = "Press again";
+    Button(a, x + bw - 200, y + 8, 188, 36, label, BTN_RED, H_CLEAR);
+    return;
+  }
   Card(a, x, y, (g_cw - SIDE_W - PANEL_W - 2 * PAD), COMPOSE_H);
+  if (!CanPost(a, a->kind)) {
+    a->kind = KIND_ALERT;
+    if (CanPost(a, KIND_NOTE))
+      a->kind = KIND_NOTE;
+    else if (CanPost(a, KIND_COMMAND))
+      a->kind = KIND_COMMAND;
+  }
   I64 bx = x + 8;
-  for (I64 k = 0; k < 3; k++) {
+  for (I64 k = 0; k < 4; k++) {
     I64 kind = KIND_NOTE;
     U8 *label = "Note";
     I64 g = G_PENCIL;
     if (k == 1) {
       kind = KIND_CHAT;
-      label = "Chat";
+      label = "Floor";
       g = G_CHAT;
     } else if (k == 2) {
+      kind = KIND_COMMAND;
+      label = "Command";
+      g = G_CHAT;
+    } else if (k == 3) {
       kind = KIND_ALERT;
       label = "Alert";
       g = G_BELL;
     }
+    if (!CanPost(a, kind))
+      continue;
     Bool on = a->kind == kind;
     U32 bg = C_SURFACE, fg = C_MUTED;
     if (on && kind == KIND_ALERT) {
@@ -1521,23 +1603,26 @@ U0 DrawComposer(App *a)
     } else if (on) {
       bg = C_RAISED;
       fg = C_TEXT;
-    } else if (Hover(a, bx, y + 8, 82, 36)) {
+    } else if (Hover(a, bx, y + 8, MaxI64(82, TextWidth(c, F_SEMI, label) + 44), 36)) {
       fg = C_TEXT;
     }
-    Round(c, bx, y + 8, 82, 36, 6, bg);
-    I64 lx = bx + (82 - TextWidth(c, F_SEMI, label) - 20) / 2 + 20;
+    I64 kw = MaxI64(82, TextWidth(c, F_SEMI, label) + 44);
+    Round(c, bx, y + 8, kw, 36, 6, bg);
+    I64 lx = bx + (kw - TextWidth(c, F_SEMI, label) - 20) / 2 + 20;
     Icon(a, g, lx - 12, y + 26, 14, fg);
     TextMid(c, F_SEMI, lx, y + 26, label, fg);
-    AddHit(a, bx, y + 8, 82, 36, H_KIND, kind);
-    bx += 86;
+    AddHit(a, bx, y + 8, kw, 36, H_KIND, kind);
+    bx += kw + 4;
   }
   U8 hint[96];
   if (a->kind == KIND_NOTE)
     snprintf(hint, 96, "Note under %s: what you saw or did, and where", g_phase_names[IncidentPhase(a)]);
   else if (a->kind == KIND_ALERT)
     StrCpy(hint, "Alert the manager: what looks wrong and where. Their panel buzzes.");
+  else if (a->kind == KIND_COMMAND)
+    StrCpy(hint, "Command: lead, Legal, Executive, Comms, Insurer. Not shown to the floor.");
   else
-    StrCpy(hint, "Message the team. Chat is kept in the log too.");
+    StrCpy(hint, "Floor: the people working the incident. Kept in the log too.");
   Input(a, FLD_COMPOSE, bx + 4, y + 8, (g_cw - SIDE_W - PANEL_W - 2 * PAD) - (bx - x) - 4 - 100, 36, hint);
   Button(a, x + (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 92, y + 8, 84, 36, "Send", BTN_PRIMARY, H_SEND);
 }
@@ -1600,6 +1685,8 @@ U0 LogList(App *a, I64 x, I64 y, I64 w, I64 h, I64 scroll, Bool filtered)
   for (I64 k = log->count - 1; k >= 0 && n < LIST_MAX; k--) {
     Entry *e = &log->entries[a->order[k]];
     if (e->kind == KIND_EVENT)
+      continue;
+    if (!Visible(a, e))
       continue;
     EntryText(log, e, text);
     if (filtered && !PassesFilter(a, e, text))
@@ -1671,7 +1758,8 @@ U0 Avatar(App *a, U8 *pk, I64 cx, I64 cy)
 
 Bool IsMessage(Entry *e)
 {
-  return e->kind == KIND_NOTE || e->kind == KIND_CHAT || e->kind == KIND_ALERT || e->kind == KIND_SCOPE;
+  return e->kind == KIND_NOTE || e->kind == KIND_CHAT || e->kind == KIND_ALERT || e->kind == KIND_SCOPE ||
+         e->kind == KIND_COMMAND;
 }
 
 // Names of the other stations that hold e, from their last heads.
@@ -1773,6 +1861,10 @@ I64 ConvoItem(App *a, Entry *e, U8 *text, Bool cont, I64 x, I64 y, I64 w, Bool d
   if (mine) {
     bg = Mix(C_CYAN, C_SURFACE, 26);
     border = Mix(C_CYAN, C_SURFACE, 60);
+  }
+  if (e->kind == KIND_COMMAND) {
+    bg = Mix(C_AMBER, C_SURFACE, 22);
+    border = Mix(C_AMBER, C_SURFACE, 70);
   }
   if (e->kind == KIND_ALERT) {
     bg = Mix(C_RED, C_SURFACE, 40);
@@ -2072,7 +2164,9 @@ U0 DrawLogPage(App *a)
   PageHead(a, "Chat log", sub);
 
   I64 x = CX0 + (g_cw - SIDE_W - PANEL_W - 2 * PAD);
-  for (I64 f = 4; f >= 0; f--) {
+  for (I64 f = FILTERS - 1; f >= 0; f--) {
+    if ((f == FILTER_CHAT && !Can(a, CAN_FLOOR_READ)) || (f == FILTER_CMD && !Can(a, CAN_CMD_READ)))
+      continue;
     I64 w = TextWidth(c, F_MED, g_filter_names[f]) + 26;
     x -= w;
     Bool on = a->filter == f;
@@ -2790,12 +2884,20 @@ U0 DrawNetworkPage(App *a)
   Text(c, F_BODY, CX0 + hw + 32, ry + 56, "an entry without the other stations noticing.", C_MUTED);
 
   y += 148;
-  Card(a, CX0, y, (g_cw - SIDE_W - PANEL_W - 2 * PAD), 43 + 4 * 40 + 8);
+  Card(a, CX0, y, (g_cw - SIDE_W - PANEL_W - 2 * PAD), 43 + 5 * 40 + 8);
   ry = CardHead(a, CX0, y, (g_cw - SIDE_W - PANEL_W - 2 * PAD), "Checks on this station");
   U8 line[96];
   snprintf(line, 96, "%ld", a->st->rejected);
   TextMid(c, F_BODY, CX0 + 16, ry + 20, "Messages rejected (failed the seal or signature check)", C_MUTED);
   TextMid(c, F_SEMI, CX0 + (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 16 - TextWidth(c, F_SEMI, line), ry + 20, line, C_TEXT);
+  I64 other = MaxI64(a->team.other_lead_at, a->team.other_member_at);
+  if (other == 0)
+    StrCpy(line, "none");
+  else
+    snprintf(line, 96, "%ld messages, last %lds ago", a->team.other_count, time(NULL) - other);
+  TextMid(c, F_BODY, CX0 + 16, ry + 60, "From stations on another incident (ignored, not tampering)", C_MUTED);
+  TextMid(c, F_SEMI, CX0 + (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 16 - TextWidth(c, F_SEMI, line), ry + 60, line, C_TEXT);
+  ry += 40;
   snprintf(line, 96, "%ld", a->st->log->problems);
   TextMid(c, F_BODY, CX0 + 16, ry + 60, "Entries with a broken chain, unknown author or fork", C_MUTED);
   TextMid(c, F_SEMI, CX0 + (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 16 - TextWidth(c, F_SEMI, line), ry + 60, line, C_TEXT);
@@ -3108,11 +3210,12 @@ U0 PutLine(I32 fd, U8 *line)
   line[n] = 0;
 }
 
-U8 *g_export_kind[11] = {"", "genesis", "note", "chat", "scope", "member", "alert", "network", "event", "role", "remove"};
+U8 *g_export_kind[12] = {"", "genesis", "note", "chat", "scope", "member", "alert", "network", "event", "role", "remove",
+                         "command"};
 
 U8 *ExportKind(I64 kind)
 {
-  if (kind < 0 || kind > 10)
+  if (kind < 0 || kind > 11)
     return "";
   return g_export_kind[kind];
 }
@@ -3186,6 +3289,8 @@ Bool ExportReport(App *a)
       continue;
     NameOf(log, e->author, f2);
     Tsv(f2, f2, NAME_MAX);
+    if (e->kind == KIND_COMMAND)
+      continue;
     if (e->kind == KIND_EVENT) {
       Event ev;
       if (!EventFromBody(e->body, &ev))
@@ -3285,7 +3390,7 @@ U0 WarmReport(App *a)
 
 U0 WriteReport(App *a)
 {
-  if (a->report_state == RS_RUNNING)
+  if (a->report_state == RS_RUNNING || !Can(a, CAN_REPORT))
     return;
   if (strchr(a->st->dir, '\'') != NULL) {
     Say(a, "The station directory name has a quote in it; rename it to write a report.", C_RED_FG);
@@ -3505,6 +3610,8 @@ U0 WindowTitle(App *a)
     RoleNow(a->st->log, a->st->pk, role);
     if (Removed(a))
       snprintf(title, 160, "ARK  Removed: %s", a->st->name);
+    else if (OnOldIncident(a))
+      snprintf(title, 160, "ARK  Old incident: %s", a->st->name);
     else if (role[0])
       snprintf(title, 160, "ARK  %s: %s", role, a->st->name);
     else
@@ -3752,7 +3859,7 @@ U0 ReportEvent(App *a, I64 idx)
     return;
   Entry *e = &log->entries[idx];
   Event ev;
-  if (e->kind != KIND_EVENT || !EventFromBody(e->body, &ev) || ReportOf(a, e) != NULL)
+  if (e->kind != KIND_EVENT || !EventFromBody(e->body, &ev) || ReportOf(a, e) != NULL || !Can(a, CAN_FLOOR_POST))
     return;
   U8 ref[12], t[8], body[BODY_MAX];
   EntryRef(e, ref);
@@ -3843,6 +3950,10 @@ U0 PollFeed(App *a)
 U0 SetPhase(App *a, I64 p)
 {
   if (!IsAdmin(a->st)) {
+    if (!Can(a, CAN_FLOOR_POST)) {
+      Say(a, "Phase changes come from the floor. Ask the incident lead in Command.", C_MUTED);
+      return;
+    }
     U8 ask[96];
     I64 now = time(NULL);
     if (a->phase_asked == p && now - a->phase_asked_at < 60) {
@@ -3871,10 +3982,25 @@ U0 SetPhase(App *a, I64 p)
 U0 SendCompose(App *a)
 {
   Field *f = &a->fields[FLD_COMPOSE];
-  if (f->len == 0 || Removed(a))
+  if (f->len == 0 || Removed(a) || OnOldIncident(a))
     return;
+  if (!CanPost(a, a->kind)) {
+    Say(a, "Your role can't post there.", C_RED_FG);
+    return;
+  }
   if (PostAndSend(a, a->kind, IncidentPhase(a), f->text, f->len)) {
     ClearField(a, FLD_COMPOSE);
+    // Show what was just sent, even if another tab was picked.
+    I64 tab = FILTER_ALL;
+    if (a->kind == KIND_NOTE)
+      tab = FILTER_NOTE;
+    else if (a->kind == KIND_CHAT)
+      tab = FILTER_CHAT;
+    else if (a->kind == KIND_COMMAND)
+      tab = FILTER_CMD;
+    if (a->filter != FILTER_ALL && a->filter != tab)
+      a->filter = tab;
+    a->scroll = 0;
     if (a->kind == KIND_ALERT) {
       Say(a, "Alert sent to the manager.", C_RED_FG);
       a->kind = KIND_NOTE;
@@ -3885,6 +4011,10 @@ U0 SendCompose(App *a)
 U0 OpenScope(App *a)
 {
   a->view = V_SCOPE;
+  if (!Can(a, CAN_FLOOR_POST)) {
+    Say(a, "Scope is recorded by Security and IT.", C_MUTED);
+    return;
+  }
   a->scope_open = TRUE;
   a->scope_type = -1;
   a->scope_status = -1;
@@ -4020,6 +4150,8 @@ U0 Choose(App *a, Bool start)
 U0 Act(App *a, I64 id, I64 arg)
 {
   if (id == H_NAV) {
+    if (arg == V_SERVER && !Can(a, CAN_SERVER_READ))
+      return;
     a->view = arg;
     a->scroll = 0;
     a->server_scroll = 0;
@@ -4037,6 +4169,8 @@ U0 Act(App *a, I64 id, I64 arg)
   } else if (id == H_SEND) {
     SendCompose(a);
   } else if (id == H_KIND) {
+    if (!CanPost(a, arg))
+      return;
     a->kind = arg;
     a->focus = FLD_COMPOSE;
   } else if (id == H_ROLE) {
@@ -4059,6 +4193,12 @@ U0 Act(App *a, I64 id, I64 arg)
   } else if (id == H_FILTER) {
     a->filter = arg;
     a->scroll = 0;
+    if (arg == FILTER_NOTE && CanPost(a, KIND_NOTE))
+      a->kind = KIND_NOTE;
+    else if (arg == FILTER_CHAT && CanPost(a, KIND_CHAT))
+      a->kind = KIND_CHAT;
+    else if (arg == FILTER_CMD && CanPost(a, KIND_COMMAND))
+      a->kind = KIND_COMMAND;
   } else if (id == H_SCOPE_OPEN) {
     OpenScope(a);
   } else if (id == H_SCOPE_SHUT) {
@@ -4230,6 +4370,8 @@ U0 OnKey(App *a, I64 sym, I64 mod)
     a->kind = KIND_NOTE;
     if (sym == KEY_F3)
       a->kind = KIND_CHAT;
+    if (!CanPost(a, a->kind))
+      a->kind = KIND_COMMAND;
     a->focus = FLD_COMPOSE;
   } else if (sym == KEY_F4) {
     OpenScope(a);
@@ -4237,7 +4379,7 @@ U0 OnKey(App *a, I64 sym, I64 mod)
     a->view = V_LOG;
     a->kind = KIND_ALERT;
     a->focus = FLD_COMPOSE;
-  } else if (sym == KEY_F6) {
+  } else if (sym == KEY_F6 && Can(a, CAN_SERVER_READ)) {
     a->view = V_SERVER;
   } else if (sym == KEY_F7) {
     a->view = V_REPORT;
@@ -4361,6 +4503,8 @@ U0 PollLink(App *a)
 {
   if (a->link.fd < 0 || a->mode != MODE_READY)
     return;
+  TagLink(&a->link, a->st);
+  I64 before = a->team.other_member_at;
   U8 *msg = MAlloc(MSG_MAX);
   I64 n;
   while ((n = LinkPoll(&a->link, msg)) > 0) {
@@ -4368,6 +4512,9 @@ U0 PollLink(App *a)
     a->dirty = TRUE;
   }
   Free(msg);
+  if (a->team.other_member_at != before && a->team.other_member_at - before > 60)
+    Say(a, "A laptop still on an old incident is on the relay. On that laptop: Team, Clear this station, then Join.",
+        LightOf(C_AMBER));
 }
 
 App *AppNew(U8 *dir, U8 *port, U8 *panel)

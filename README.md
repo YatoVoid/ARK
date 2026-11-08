@@ -41,7 +41,22 @@ The report after Request report, and the breach clocks:
 
 ## What it does
 
-- **Roles and a team conversation.** The station that starts the incident is the incident lead (manager). Everyone else joins and is admitted by the manager after checking a six-digit code, and the manager gives them a role: Security, IT, Legal, Executive, Comms or Insurer. The Chat log reads as a conversation: avatars coloured by role, your messages on the right, alerts in red, admissions and network cuts as thin lines. Under your messages, "Received by" names the stations that hold them, taken from the sync messages they already send. Each window's title shows the role, e.g. `ARK  Legal: Priya Shah`. The manager can change a role or remove someone later (Team, Manage). Removing someone also starts a new team key and sends it to everyone else, so the removed station can't read anything new, and anything it writes afterwards is flagged NOT A MEMBER.
+- **Roles and a team conversation.** The station that starts the incident is the incident lead (manager). Everyone else joins and is admitted by the manager after checking a six-digit code, and the manager gives them a role. Each window's title shows it, e.g. `ARK  Legal: Priya Shah`. The Chat log reads as a conversation: avatars coloured by role, your messages on the right, alerts in red, admissions and network cuts as thin lines. Under your messages, "Received by" names the stations that hold them, taken from the sync messages they already send.
+- **Two channels.** The floor (Security, IT) works the incident in **Floor**. Command (Legal, Executive, Comms, Insurer, HR) decides what the business does in **Command**, so questions from leadership don't bury the engineers and legal talk stays apart. The lead is in both. Command is left out of the report data.
+
+  | | Lead | Security, IT | Legal, Executive | Comms, HR | Insurer |
+  |---|---|---|---|---|---|
+  | Overview, Scope, Breach clocks, Team | yes | yes | yes | yes | yes |
+  | Server log | yes | yes | yes | no | yes |
+  | Post notes, Floor, scope, server reports; ask for a phase | yes | yes | no, reads Floor | no | no |
+  | Command | yes | no | yes | yes | yes |
+  | Request report | yes | yes | yes | yes | no |
+  | Move phase, approve, change roles, remove | yes | no | no | no | no |
+  | Alert the manager, cut your own laptop | yes | yes | yes | yes | yes |
+
+  The rules are checked when an entry is added to the log, not just on screen: an entry its author's role doesn't allow is flagged NOT ALLOWED on every station. Every member holds the team key, so hiding a channel is need to know on screen, not encryption.
+- **Changing the team.** The manager can change a role or remove someone later (Team, Manage). Removing someone also starts a new team key and sends it to everyone else, so the removed station can't read anything new, and anything it writes afterwards is flagged NOT A MEMBER.
+- **Starting over.** Every message on the relay carries a short tag naming its incident. If the manager clears their station and starts again, a laptop still on the old incident says so ("Your manager is running a new incident") and offers Clear this station, and the new incident ignores its traffic without calling it tampering.
 - **Server log.** `tools/ark-watch` reads sudo, SSH, su, account changes, typed shell commands and web requests on the watched server. Each one is signed into the log, and known attack steps are flagged SUSPICIOUS. An analyst sends one to the manager with **Report to manager**.
 - **Kill switch.** The manager's Arduino panel buzzes when an alert arrives. Red cuts that laptop off the internet and green restores it. ARK keeps working over the relay the whole time. The same buttons are on screen.
 - **Phases.** DETECT, CONTAIN, ERADICATE, RECOVER. Only the manager moves the incident. An analyst who clicks a phase sends the manager a request, and the manager gets a **Move to** button for it.

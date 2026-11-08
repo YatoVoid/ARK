@@ -29,6 +29,14 @@ U0 Check(Bool ok, U8 *name)
   }
 }
 
+Entry *WithBody(Log *log, U8 *text)
+{
+  for (I64 i = log->count - 1; i >= 0; i--)
+    if (StrCmp(log->entries[i].body, text) == 0)
+      return &log->entries[i];
+  return NULL;
+}
+
 U0 Type(App *a, U8 *text)
 {
   OnText(a, text);
@@ -98,7 +106,7 @@ U0 Deliver(Station *from, Station *to)
 I32 Main(I32 argc, U8 **argv)
 {
   CryptoInit();
-  system("rm -rf build/tmp-ui-test build/tmp-ui-test-b build/tmp-ui-test-c");
+  system("rm -rf build/tmp-ui-test build/tmp-ui-test-b build/tmp-ui-test-c build/tmp-ui-test-z build/tmp-ui-test-j");
   App *a = AppNew("build/tmp-ui-test", "/nonexistent", NULL);
   if (!CanvasOpen(a->cv, "test", "assets/fonts")) {
     "canvas: %s\n", SDL_GetError();
@@ -144,6 +152,22 @@ I32 Main(I32 argc, U8 **argv)
   Type(a, "pulling the switch");
   Check(Click(a, H_SEND), "Send is clickable");
   Check(Newest(a)->kind == KIND_CHAT, "chat posts as CHAT");
+
+  // Sending from a tab that hides the message switches to one that shows it.
+  a->view = V_LOG;
+  a->filter = FILTER_SCOPE;
+  Draw(a);
+  Click(a, H_KIND, KIND_NOTE);
+  Type(a, "seen from the scope tab");
+  Click(a, H_SEND);
+  Check(a->filter == FILTER_NOTE, "a note sent from the Scope tab shows under Notes");
+  Check(Click(a, H_FILTER, FILTER_CMD) && a->kind == KIND_COMMAND, "the Command tab sets the composer to Command");
+  Type(a, "brief the board at ten");
+  Click(a, H_SEND);
+  Check(Newest(a)->kind == KIND_COMMAND && Newest(a)->status == ST_OK && a->filter == FILTER_CMD,
+        "the lead posts in Command");
+  a->filter = FILTER_ALL;
+  a->view = V_OVERVIEW;
 
   I64 before = a->st->log->count;
   Key(a, KEY_F4);
@@ -226,12 +250,12 @@ I32 Main(I32 argc, U8 **argv)
   a->team.join_pending = TRUE;
   MemCpy(a->team.join_pk, b->pk, PK_BYTES);
   StrCpy(a->team.join_name, "Marcus");
-  Check(Click(a, H_ROLE, 2), "a role can be picked before approving");
+  Check(Click(a, H_ROLE, 1), "a role can be picked before approving");
   Approve(a);
   U8 role[NAME_MAX], who[NAME_MAX];
   RoleOf(a->st->log, b->pk, role);
   NameOf(a->st->log, b->pk, who);
-  Check(StrCmp(role, "Legal") == 0 && StrCmp(who, "Marcus") == 0, "the role is kept beside the name, not in it");
+  Check(StrCmp(role, "IT") == 0 && StrCmp(who, "Marcus") == 0, "the role is kept beside the name, not in it");
   RoleOf(a->st->log, a->st->pk, role);
   Check(StrCmp(role, "Incident lead") == 0, "the manager is the incident lead");
 
@@ -366,7 +390,7 @@ I32 Main(I32 argc, U8 **argv)
   Draw(a);
   Draw(m);
   Check(StrNCmp(a->title, "ARK  Manager: ", 14) == 0, "the manager's window title says Manager");
-  Check(StrNCmp(m->title, "ARK  Legal: Marcus", 18) == 0, "a member's window title says the role they were given");
+  Check(StrNCmp(m->title, "ARK  IT: Marcus", 15) == 0, "a member's window title says the role they were given");
   Check(Click(m, H_PHASE, PHASE_RECOVER), "a member can click a phase");
   Check(b->log->entries[b->log->count - 1].kind == KIND_ALERT &&
         RequestedPhase(b->log->entries[b->log->count - 1].body) == PHASE_RECOVER,
@@ -438,6 +462,121 @@ I32 Main(I32 argc, U8 **argv)
     Draw(a);
   }
   Check(TRUE, "every page draws with a cut, alerts and server events in the log");
+
+  // The manager clears their station and starts a new incident; Marcus's
+  // laptop still holds the old one.
+  {
+    Station *z = MAlloc(sizeof(Station));
+    StationInit(z, "build/tmp-ui-test-z");
+    StationCreate(z, z->dir, "Dana", "a new passphrase");
+    U8 *zm = MAlloc(MSG_MAX);
+    StartIncident(z, "Second incident", zm);
+    Team *zt = CAlloc(sizeof(Team));
+    Link *zl = CAlloc(sizeof(Link));
+    zl->fd = -1;
+    Link *ml = CAlloc(sizeof(Link));
+    ml->fd = -1;
+    U8 old_tag[TAG_LEN], new_tag[TAG_LEN];
+    TagLink(ml, m->st);
+    MemCpy(old_tag, ml->tag, TAG_LEN);
+    TagLink(zl, z);
+    MemCpy(new_tag, zl->tag, TAG_LEN);
+    Check(!Same(old_tag, new_tag, TAG_LEN - 1) && new_tag[TAG_LEN - 1] == 1 && old_tag[TAG_LEN - 1] == 0,
+          "each incident has its own tag, and the lead's is marked");
+    // The old laptop's heads and a post, as the new lead's station gets them.
+    I64 rej = z->rejected, zc = z->log->count;
+    MemCpy(zl->rx_tag, old_tag, TAG_LEN);
+    TeamReceive(z, zt, zl, msg, MakeHeads(m->st, msg));
+    len = Post(m->st, KIND_NOTE, PHASE_CONTAIN, "into the old incident", 21, msg);
+    TeamReceive(z, zt, zl, msg, len);
+    Check(z->rejected == rej && z->log->count == zc && zt->other_member_at > 0 && zt->other_count == 2,
+          "the new incident ignores the old laptop's traffic, and doesn't call it tampering");
+    // The new lead's heads, as the old laptop gets them.
+    rej = m->st->rejected;
+    MemCpy(ml->rx_tag, new_tag, TAG_LEN);
+    TeamReceive(m->st, &m->team, ml, msg, MakeHeads(z, msg));
+    Check(m->st->rejected == rej && m->team.other_lead_at > 0, "the old laptop hears that a different incident is running");
+    for (I64 i = 0; i < m->team.peer_count; i++)
+      m->team.peers[i].heard = 0;
+    m->view = V_OVERVIEW;
+    Draw(m);
+    Check(OnOldIncident(m) && StrNCmp(m->title, "ARK  Old incident: ", 19) == 0,
+          "with its own manager gone quiet, it says it's on the old incident");
+    I64 mc = m->st->log->count;
+    m->kind = KIND_NOTE;
+    Type(m, "should not post");
+    Click(m, H_SEND);
+    Check(m->st->log->count == mc, "and it doesn't post into the dead incident");
+    Check(Click(m, H_CLEAR), "the banner has Clear this station");
+    m->clear_armed = 0;
+    // A fresh station asking to join carries a zero tag and gets through.
+    Station *j = MAlloc(sizeof(Station));
+    StationInit(j, "build/tmp-ui-test-j");
+    StationCreate(j, j->dir, "Marcus", "fresh passphrase");
+    Link *jl = CAlloc(sizeof(Link));
+    jl->fd = -1;
+    TagLink(jl, j);
+    MemCpy(zl->rx_tag, jl->tag, TAG_LEN);
+    TeamReceive(z, zt, zl, msg, MakeJoin(j, msg));
+    Check(zt->join_pending && Same(zt->join_pk, j->pk, PK_BYTES), "a cleared laptop can join the new incident");
+    // Its own manager heard again: no banner.
+    m->team.other_lead_at = 0;
+    Check(!OnOldIncident(m), "no banner once only its own incident is heard");
+    Free(zm);
+  }
+
+  // Channels and what each role may do. Marcus is IT, on the floor.
+  for (I64 i = 0; i < m->st->log->count; i++)
+    StationReceive(a->st, msg, MakeMessage(m->st, &m->st->log->entries[i], msg));
+  for (I64 i = 0; i < a->st->log->count; i++)
+    StationReceive(m->st, msg, MakeMessage(a->st, &a->st->log->entries[i], msg));
+  len = Post(m->st, KIND_COMMAND, PHASE_CONTAIN, "floor in command", 16, msg);
+  StationReceive(a->st, msg, len);
+  Entry *fc = WithBody(a->st->log, "floor in command");
+  Check(fc != NULL && fc->status == ST_NOT_ALLOWED, "a floor role writing in Command is flagged NOT ALLOWED");
+  Check(!Visible(m, WithBody(a->st->log, "brief the board at ten")), "the floor doesn't see the Command channel");
+  RoleNow(a->st->log, b->pk, role);
+  a->view = V_TEAM;
+  Draw(a);
+  CollectMembers(a);
+  for (I64 i = 0; i < a->member_count; i++)
+    if (Same(a->members[i].pk, b->pk, PK_BYTES)) {
+      Click(a, H_MEMBER, i);
+      Draw(a);
+      Click(a, H_SET_ROLE, 4);
+      Click(a, H_MEMBER, i);
+    }
+  for (I64 i = 0; i < a->st->log->count; i++)
+    StationReceive(m->st, msg, MakeMessage(a->st, &a->st->log->entries[i], msg));
+  Check(!Can(m, CAN_FLOOR_POST) && Can(m, CAN_CMD_POST) && !Can(m, CAN_SERVER_READ), "Comms posts in Command only");
+  m->view = V_LOG;
+  m->kind = KIND_NOTE;
+  Draw(m);
+  Check(m->kind == KIND_COMMAND, "a Comms composer starts on Command");
+  Check(!Click(m, H_NAV, V_SERVER) || m->view != V_SERVER, "Comms has no Server log");
+  I64 before_cmd = m->st->log->count;
+  Type(m, "holding statement drafted");
+  Click(m, H_SEND);
+  Check(m->st->log->count == before_cmd + 1 && Newest(m)->kind == KIND_COMMAND && Newest(m)->status == ST_OK,
+        "Comms posts in Command");
+  for (I64 i = 0; i < m->st->log->count; i++)
+    StationReceive(a->st, msg, MakeMessage(m->st, &m->st->log->entries[i], msg));
+  len = Post(m->st, KIND_NOTE, PHASE_CONTAIN, "comms note", 10, msg);
+  StationReceive(a->st, msg, len);
+  Entry *cn = WithBody(a->st->log, "comms note");
+  Check(cn != NULL && cn->status == ST_NOT_ALLOWED, "a note from Comms, sent around the UI, is flagged NOT ALLOWED");
+  Check(Visible(a, WithBody(a->st->log, "brief the board at ten")) && Visible(a, WithBody(a->st->log, "pulling the switch")),
+        "the lead sees both channels");
+  m->view = V_OVERVIEW;
+  for (I64 i = 0; i < a->member_count; i++)
+    if (Same(a->members[i].pk, b->pk, PK_BYTES)) {
+      Click(a, H_MEMBER, i);
+      Draw(a);
+      Click(a, H_SET_ROLE, 1);
+      Click(a, H_MEMBER, i);
+    }
+  for (I64 i = 0; i < a->st->log->count; i++)
+    StationReceive(m->st, msg, MakeMessage(a->st, &a->st->log->entries[i], msg));
 
   // Managing the team: change a role, then remove someone.
   a->view = V_TEAM;

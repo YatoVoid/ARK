@@ -3,17 +3,23 @@
 //
 // Frame layout (at most 250 bytes, which also caps a line so the hub can
 // drop anything longer):
-//   0      'A'
+//   0      'T'
 //   1..4   message id, random per message
 //   5      part index
 //   6      part count
-//   7..    data, at most FRAME_DATA bytes
+//   7..10  incident tag: the first 4 bytes of the incident's genesis hash,
+//          zero from a station not in an incident yet
+//   11     1 if the sender is that incident's lead
+//   12..   data, at most FRAME_DATA bytes
 //
 // The link moves sealed bytes and trusts none of them. A missing part means
 // the message never arrives; a forged part fails the signature check later.
+// The tag is in the clear and unsigned: it only sorts out traffic from a
+// different incident on the same relay, which the relay could drop anyway.
 
 #define FRAME_MAX     250
-#define FRAME_HEAD    7
+#define FRAME_HEAD    12
+#define TAG_LEN       5
 #define FRAME_DATA    (FRAME_MAX - FRAME_HEAD)
 #define MAX_PARTS     16
 #define MSG_MAX       (MAX_PARTS * FRAME_DATA)
@@ -29,6 +35,7 @@ class Pending
   I64 got;          // bitmask of parts received
   I64 lens[MAX_PARTS];
   I64 age;          // LinkPoll call count when last touched, for eviction
+  U8 tag[TAG_LEN];
   U8 data[MSG_MAX];
 };
 
@@ -39,6 +46,8 @@ class Link
   I64 line_len;
   U8 info[128];     // last "I" or "E" line from the relay, for the status bar
   I64 ticks;
+  U8 tag[TAG_LEN];      // put on everything sent
+  U8 rx_tag[TAG_LEN];   // of the message LinkPoll last returned
   Pending pending[PENDING_SLOTS];
 };
 
@@ -112,10 +121,11 @@ Bool LinkSend(Link *l, U8 *msg, I64 len)
   for (I64 part = 0; part < count; part++) {
     I64 start = part * FRAME_DATA;
     I64 n = MinI64(FRAME_DATA, len - start);
-    frame[0] = 'A';
+    frame[0] = 'T';
     MemCpy(frame + 1, &id, 4);
     frame[5] = part;
     frame[6] = count;
+    MemCpy(frame + 7, l->tag, TAG_LEN);
     MemCpy(frame + FRAME_HEAD, msg + start, n);
     SendFrame(l, frame, FRAME_HEAD + n);
   }
@@ -142,7 +152,7 @@ Pending *FindSlot(Link *l, U32 id, I64 count)
 // completed a message (copied to out), otherwise 0.
 I64 TakeFrame(Link *l, U8 *frame, I64 len, U8 *out)
 {
-  if (len < FRAME_HEAD + 1 || frame[0] != 'A')
+  if (len < FRAME_HEAD + 1 || frame[0] != 'T')
     return 0;
   U32 id;
   MemCpy(&id, frame + 1, 4);
@@ -158,12 +168,15 @@ I64 TakeFrame(Link *l, U8 *frame, I64 len, U8 *out)
   MemCpy(p->data + part * FRAME_DATA, frame + FRAME_HEAD, n);
   p->lens[part] = n;
   p->got |= 1 << part;
+  if (part == 0)
+    MemCpy(p->tag, frame + 7, TAG_LEN);
   if (p->got != (1 << count) - 1)
     return 0;
 
   // Every part but the last is full, so the total is easy to add up.
   I64 total = (count - 1) * FRAME_DATA + p->lens[count - 1];
   MemCpy(out, p->data, total);
+  MemCpy(l->rx_tag, p->tag, TAG_LEN);
   p->count = 0;
   return total;
 }

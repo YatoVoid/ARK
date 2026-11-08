@@ -44,7 +44,36 @@ class Team
   U8 join_name[NAME_MAX];
   Peer peers[MAX_PEERS];
   I64 peer_count;
+  // Traffic on the relay tagged with a different incident: a station left
+  // over from an incident that was cleared, or another team's. Not counted
+  // as rejected, because it was never meant for this station.
+  I64 other_lead_at;       // time() a lead of another incident was last heard
+  I64 other_member_at;     // time() a member of another incident was last heard
+  I64 other_count;
 };
+
+// The incident this station belongs to: the first TAG_LEN - 1 bytes of the
+// lead's genesis entry hash. FALSE before the genesis has arrived.
+Bool IncidentId(Station *s, U8 *out)
+{
+  Log *log = s->log;
+  for (I64 i = 0; i < log->count; i++) {
+    Entry *e = &log->entries[i];
+    if (e->kind == KIND_GENESIS && e->status == ST_OK && log->has_admin && Same(e->author, log->admin, PK_BYTES)) {
+      MemCpy(out, e->hash, TAG_LEN - 1);
+      return TRUE;
+    }
+  }
+  return FALSE;
+}
+
+// Sets what the link stamps on everything this station sends.
+U0 TagLink(Link *link, Station *s)
+{
+  MemSet(link->tag, 0, TAG_LEN);
+  if (IncidentId(s, link->tag) && Same(s->log->admin, s->pk, PK_BYTES))
+    link->tag[TAG_LEN - 1] = 1;
+}
 
 I64 JoinCode(U8 *pk)
 {
@@ -126,43 +155,6 @@ I64 MakeHeads(Station *s, U8 *out)
   return 3 + plain_len + NONCE_BYTES + MAC_BYTES;
 }
 
-// The role the manager gave pk when admitting it: the text after the
-// name in its MEMBER_ADD. The manager is "Incident lead". Empty if none.
-U0 RoleOf(Log *log, U8 *pk, U8 *out)
-{
-  out[0] = 0;
-  if (log->has_admin && Same(pk, log->admin, PK_BYTES)) {
-    StrCpy(out, "Incident lead");
-    return;
-  }
-  for (I64 i = 0; i < log->count; i++) {
-    Entry *e = &log->entries[i];
-    if (e->kind == KIND_MEMBER_ADD && e->status == ST_OK && e->body_len > PK_BYTES &&
-        Same(e->body, pk, PK_BYTES) && log->has_admin && Same(e->author, log->admin, PK_BYTES)) {
-      U8 *nl = strchr(e->body + PK_BYTES, '\n');
-      if (nl != NULL)
-        CopyText(out, nl + 1, NAME_MAX);
-      return;
-    }
-  }
-}
-
-// The newest role the manager gave pk: from its MEMBER_ADD, or a later
-// ROLE entry.
-U0 RoleNow(Log *log, U8 *pk, U8 *out)
-{
-  RoleOf(log, pk, out);
-  U64 best = 0;
-  for (I64 i = 0; i < log->count; i++) {
-    Entry *e = &log->entries[i];
-    if (e->kind == KIND_ROLE && e->status == ST_OK && e->body_len > PK_BYTES && Same(e->body, pk, PK_BYTES) &&
-        log->has_admin && Same(e->author, log->admin, PK_BYTES) && e->lamport >= best) {
-      best = e->lamport;
-      CopyText(out, e->body + PK_BYTES, NAME_MAX);
-    }
-  }
-}
-
 // Does peer p hold author's entry number seq, going by its last heads?
 Bool PeerHas(Peer *p, U8 *author, I64 seq)
 {
@@ -240,6 +232,19 @@ U0 TeamReceive(Station *s, Team *t, Link *link, U8 *msg, I64 len)
 {
   if (len < 1)
     return;
+  // From a station in a different incident: note it and stop there. A zero
+  // tag is a station not in any incident yet (asking to join, or waiting
+  // for the log after its key arrived).
+  U8 mine[TAG_LEN], zero[TAG_LEN];
+  MemSet(zero, 0, TAG_LEN);
+  if (IncidentId(s, mine) && !Same(link->rx_tag, zero, TAG_LEN - 1) && !Same(link->rx_tag, mine, TAG_LEN - 1)) {
+    if (link->rx_tag[TAG_LEN - 1] == 1)
+      t->other_lead_at = time(NULL);
+    else
+      t->other_member_at = time(NULL);
+    t->other_count++;
+    return;
+  }
   if (msg[0] == MSG_ENTRY) {
     StationReceive(s, msg, len);
     return;

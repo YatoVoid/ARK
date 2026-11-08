@@ -56,6 +56,15 @@ I32 Main(I32 argc, U8 **argv)
     "FAIL  600 bytes B -> A\n";
     g_failed++;
   }
+  a->tag[0] = 0xAB;
+  a->tag[3] = 0x42;
+  a->tag[TAG_LEN - 1] = 1;
+  if (SendAndReceive(a, b, 700) && b->rx_tag[0] == 0xAB && b->rx_tag[3] == 0x42 && b->rx_tag[TAG_LEN - 1] == 1) {
+    "ok    the incident tag arrives with the message\n";
+  } else {
+    "FAIL  the incident tag arrives with the message\n";
+    g_failed++;
+  }
   if (g_failed) {
     "%d failed\n", g_failed;
     return 1;
