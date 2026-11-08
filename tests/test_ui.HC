@@ -331,6 +331,34 @@ I32 Main(I32 argc, U8 **argv)
   Check(Hits(m, H_REPORT) == 0, "and the button is gone after");
   a->alerts_acked = AlertCount(a);
 
+  // Report: the export holds the verified log, the tool runs in the background.
+  Check(ExportReport(a), "the station exports its log for the report");
+  U8 *exp = MAlloc(REPORT_MAX);
+  I64 n = ReadSmall("build/tmp-ui-test/report/export.tsv", exp, REPORT_MAX);
+  Check(n > 0 && StrNCmp(exp, "ark-export\t1\n", 13) == 0, "export starts with its format line");
+  Check(strstr(exp, "\nevent\t") != NULL && strstr(exp, "\tcat /etc/shadow\n") != NULL, "export holds the server events");
+  Check(strstr(exp, "\nasset\t") != NULL && strstr(exp, "\nentry\t") != NULL && strstr(exp, "\tnetwork\t") != NULL,
+        "export holds systems, notes and the cut");
+  Free(exp);
+  setenv("ARK_REPORT_CMD", "tests/fake-report.sh", 1);
+  a->view = V_REPORT;
+  Draw(a);
+  Check(Click(a, H_WRITE), "Write report is clickable");
+  Check(a->report_state == RS_RUNNING, "the report runs in the background");
+  for (I64 i = 0; i < 50 && a->report_state == RS_RUNNING; i++) {
+    system("sleep 0.1");
+    PollReport(a);
+  }
+  Check(a->report_state == RS_DONE && strstr(a->report_text, "# Incident report: test") != NULL,
+        "the station shows the report when the tool is done");
+  Check(strstr(a->report_msg, "figures only") != NULL, "it says when there was no model summary");
+  Draw(a);
+  Check(Click(a, H_WRITE) && a->report_state == RS_RUNNING, "Write again runs it again");
+  for (I64 i = 0; i < 50 && a->report_state == RS_RUNNING; i++) {
+    system("sleep 0.1");
+    PollReport(a);
+  }
+
   for (I64 v = 0; v < VIEWS; v++) {
     a->view = v;
     Draw(a);

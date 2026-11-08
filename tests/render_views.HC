@@ -102,7 +102,7 @@ I32 Main(I32 argc, U8 **argv)
   MemSet(a->team.join_pk, 9, PK_BYTES);
   StrCpy(a->team.join_name, "Priya Shah");
 
-  U8 *names[VIEWS] = {"overview", "server", "log", "scope", "clocks", "team", "network", "guide"};
+  U8 *names[VIEWS] = {"overview", "server", "log", "scope", "clocks", "team", "network", "report", "guide"};
   for (I64 v = 0; v < VIEWS; v++) {
     a->view = v;
     Shot(a, names[v]);

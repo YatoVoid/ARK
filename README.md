@@ -9,7 +9,7 @@ ARK is written in HolyC (compiled with [hcc](https://github.com/Jamesbarford/hol
 > "An idiot admires complexity, a genius admires simplicity."
 > Terry A. Davis
 
-![A worker reports a suspicious server command, the manager's panel buzzes, the manager cuts the internet and later restores it](docs/demo.gif)
+![A worker reports a suspicious server command, the manager's panel buzzes, the manager cuts the internet, restores it, and writes the report](docs/demo.gif)
 
 How to run this yourself, from a clean slate: [docs/DEMO.md](docs/DEMO.md).
 
@@ -28,6 +28,7 @@ Built for HackUTD (Winstead PC track: Cyber Incident Response Dashboard), Novemb
 | Server log: shell commands, sudo, logins, failed logins and web requests from `tools/ark-watch`, flagged by attack-step rules, reported to the manager in one click | done, tested (`test_ui`, `test_watch`); watcher tested live on Arch |
 | Arduino panel: red CUT takes the machine off the internet, green RESTORE (manager only) brings it back, LEDs show which, buzzer for alerts | flashed; beeps and LEDs checked by hand, real `nmcli` cut not yet run |
 | Breach-notification clocks (TX, TX AG, CA, NY, GDPR, HIPAA) | done, tested |
+| Report for the company: what happened, lost and protected, money at a cost per record, deadlines; figures from the log, summary from a local model (gemma3:4b through Ollama, offline) | done, tested (`test_report`, `test_ui`); about 7 s per report on an RTX 3050 |
 
 ## Hardware
 
@@ -56,6 +57,18 @@ tools/drill.sh                        # rehearsal intrusion: logs attacker-style
 ```
 
 Events show on every station's Server log within a second.
+
+## Report
+
+The Report page (F7) writes a report for the company from the station's log: what happened, what was lost and what was protected, money at a cost per record you set, deadlines and next steps. Every figure is computed from the signed log. A model on the same laptop writes the summary paragraphs; nothing is sent anywhere, and any sentence it writes with a number that isn't in the log is dropped.
+
+```sh
+ollama pull gemma3:4b                                    # once
+ARK_COST_PER_RECORD=160 PANEL=/dev/ttyUSB0 ./station.sh station-a usb
+tools/ark-report station-a --no-ai                       # figures only, from the command line
+```
+
+Without Ollama the report is still written, from the figures alone. Saved to `station-a/report/report.md`.
 
 ## Docs
 

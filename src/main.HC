@@ -99,6 +99,7 @@ I32 Main(I32 argc, U8 **argv)
     PollLink(a);
     PollPanel(a);
     PollFeed(a);
+    PollReport(a);
     PanelUpdate(a, FALSE);
     Heartbeat(a);
     I64 now = SDL_GetTicks();

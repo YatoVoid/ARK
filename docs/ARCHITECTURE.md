@@ -22,12 +22,13 @@ Each station is one HolyC program that thinks it's talking to a serial port. soc
 | `src/log.HC` | entries, per-author hash chains, validity check, display order | built, tested |
 | `src/station.HC` | identity, team keys, passphrase-sealed secrets file, log file, posting and receiving | built, tested |
 | `src/main.HC` | arguments, font lookup, the event loop | built |
-| `src/app.HC` | the station window: setup screens, eight pages, control panel, input, actions, panel, feed and link polling | built, tested (`test_ui`) |
+| `src/app.HC` | the station window: setup screens, nine pages, control panel, input, actions, panel, feed and link polling, the report export | built, tested (`test_ui`) |
 | `src/events.HC` | server events: feed-line parsing, event bodies, the rules that flag suspicious commands | built, tested (`test_ui`) |
 | `src/canvas.HC` | a pixel buffer the size of the window, layout units scaled to pixels, rounded boxes, text from glyphs SDL2_ttf renders at the current scale | built |
 | `src/team.HC` | join requests, key grants, heads/sync, peer list | built, tested by hand |
 | `src/deadlines.HC` | breach-notification clocks | built, tested |
 | `tools/ark-watch` | follows the journal (and optionally a web access log) and appends events to a station's feed | tested (`test_watch.py`), run live |
+| `tools/ark-report` | after-incident report: figures from the station's export, summary paragraphs from a local model through Ollama | tested (`test_report.py`), run with gemma3:4b |
 | `tools/hooks/ark-shell.*` | bash, zsh and fish hooks that log each typed command to the journal | tested by hand |
 | `tests/render_demo.HC`, `tools/make-demo-gif.py` | run both stations through the demo story and turn the screens into `docs/demo.gif` | run |
 | `tools/drill.sh` | a rehearsal intrusion for demos: logs attacker-style commands without running them | |
@@ -68,6 +69,8 @@ On the wire and on disk an entry travels as `'E' epoch(U16) Seal(record)`, seale
 |---|---|
 | `secrets` | salt + secretbox(identity keypair, name, team keys), key from the passphrase via Argon2id (libsodium interactive limits, 64 MiB). Mode 0600. |
 | `log` | every accepted message exactly as received, each with a 4-byte length. Loading replays them through the same receive path as the radio. |
+| `feed` | written by `tools/ark-watch`: one server event per line, read by the station. Mode 0600. |
+| `report/report.md` | the last report, plain text, plus a timestamped copy of each one. Mode 0600. `report/export.tsv` exists only while `ark-report` reads it. |
 
 A flipped byte in `log` makes that record fail to decrypt, so it's counted as damaged. The rest of that author's chain then shows `CHAIN BROKEN`, so the screen points at where the damage starts.
 
@@ -110,3 +113,21 @@ station: PollFeed -> KIND_EVENT entry, signed -> relay -> every station
 - **Risk** is worked out by each station when it draws, from `g_rules` in `events.HC`: SUSPICIOUS for known attack steps (reading `/etc/shadow`, clearing history, uploading with curl, adding SSH keys, new users), WATCH for things that matter in a pattern (failed logins, plain downloads, sudo). Changing the rules doesn't touch the log.
 - **Reporting** posts a `KIND_ALERT` whose body starts with `[ref]`, the first 4 bytes of the event's hash. Every station matches it back to the event and shows it as REPORTED; the manager's panel buzzes as for any alert.
 - The chat log shows everything except server events.
+
+## Report
+
+```
+station: Write report -> ExportReport -> DIR/report/export.tsv (verified entries, decrypted)
+                      -> tools/ark-report DIR &      (background, the window keeps running)
+ark-report: figures from the export ----------------> report.md: every number
+            prompt (figures + 40 log lines) -> Ollama on 127.0.0.1 (gemma3:4b)
+            JSON answer -> number guard ------------> report.md: summary paragraphs, marked
+station: PollReport reads DIR/report/status -> shows report.md on the Report page
+```
+
+- **The export** is one record per line, tab separated: `incident`, `opened`, `station`, `phase`, `integrity`, then `member`, `asset` (latest state per system), `clock`, `entry` and `event` (with its risk, why it was flagged and who reported it). Only entries that passed their checks go in. Risk and deadlines are worked out by the station, so the tool uses the same rules as the screen.
+- **Figures** are computed in Python: first suspicious event, report, cut and restore with the time between them, records lost (EXFILTRATED, ENCRYPTED), protected (CLEAN, CONTAINED) and not confirmed (SUSPECTED), public addresses, deadlines. Money is records times `ARK_COST_PER_RECORD`; without it there are no money figures.
+- **The model** gets the figures as sentences and up to 40 server events and 15 team notes, inside a block it is told is evidence, not instructions. It answers in a fixed JSON shape (`summary`, `attack`, `response`, `next_steps`), which Ollama enforces.
+- **The number guard** drops any sentence holding a number that isn't in the figures (or a log line's time stamp), and any domain that isn't in the log. Numbers inside log text don't count as allowed, because the attacker typed them.
+- **Without a model** (Ollama down, model missing, more than 90 s) the report is written from the figures and says why.
+- `ark-report --warm` loads the model and runs one token through it. The station runs it the first time the Report page opens, so pressing the button doesn't wait for a cold load (about 10 s from disk).

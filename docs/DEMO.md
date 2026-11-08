@@ -1,6 +1,6 @@
 # Running the demo
 
-![ARK demo: watcher, worker report, manager cut and restore](demo.gif)
+![ARK demo: watcher, worker report, manager cut and restore, report](demo.gif)
 
 The GIF is drawn from the real code: `tests/render_demo.HC` runs both stations through the story below and `tools/make-demo-gif.py` lays out the screens with the hardware. The one difference from a live run is that the render hands messages between stations directly instead of through the relay.
 
@@ -13,6 +13,7 @@ The GIF is drawn from the real code: `tests/render_demo.HC` runs both stations t
 | Arduino UNO Q | relay | `relay/hub.py` (forwards sealed messages), the ARK animation on its LED matrix |
 | Arduino UNO | panel, plugged into laptop A | `firmware/panel`: red CUT, green RESTORE, two LEDs, buzzer |
 | FS-01 | the watched server | in the demo, laptop A plays it: the shell hook and `tools/ark-watch` |
+| Local model | writes the report's summary | Ollama with gemma3:4b on laptop A, offline |
 
 Laptop A reaches the relay over USB. Laptop B reaches it over a Wi-Fi network the team controls (the UNO Q joins it), never the company network. For a one-laptop rehearsal both stations run on laptop A and both use USB.
 
@@ -35,6 +36,12 @@ adb shell mkdir -p /home/arduino/ark
 adb push relay/hub.py /home/arduino/ark/hub.py
 ```
 
+The report's summary needs the model on laptop A (3.4 GB, once, while you still have internet):
+
+```sh
+ollama pull gemma3:4b
+```
+
 The LED matrix animation is set up once as described in [firmware/relay-matrix/README.md](../firmware/relay-matrix/README.md); it starts by itself at every boot.
 
 ## Clean slate before a demo
@@ -47,6 +54,15 @@ rm -rf build/tmp-*                            # test and render leftovers
 ```
 
 This deletes the incident and both identities for good. Each station asks for a new name and passphrase on its next start.
+
+## Start the model
+
+```sh
+curl -s 127.0.0.1:11434/api/tags >/dev/null || (setsid nohup ollama serve >/dev/null 2>&1 &)
+tools/ark-report --warm                       # loads it into the GPU, about 10 s
+```
+
+The station also warms it the first time the Report page opens. Skip this and the report is written from the figures only.
 
 ## Start the relay
 
@@ -62,7 +78,7 @@ The hub doesn't start at boot. Run this again after the UNO Q restarts or loses 
 Each command in its own terminal:
 
 ```sh
-PANEL=/dev/ttyUSB0 ./station.sh station-a usb      # terminal 1: manager, with the panel
+ARK_COST_PER_RECORD=160 PANEL=/dev/ttyUSB0 ./station.sh station-a usb      # terminal 1: manager
 ./station.sh station-b usb                         # terminal 2: worker
 ```
 
@@ -71,8 +87,10 @@ PANEL=/dev/ttyUSB0 ./station.sh station-a usb      # terminal 1: manager, with t
 Laptop A, with the UNO Q and the panel on USB:
 
 ```sh
-PANEL=/dev/ttyUSB0 ./station.sh station-a usb
+ARK_COST_PER_RECORD=160 PANEL=/dev/ttyUSB0 ./station.sh station-a usb
 ```
+
+`ARK_COST_PER_RECORD` is the dollar figure the report multiplies lost and protected records by. Use the number your insurer or counsel gives you; without it the report has no money figures.
 
 Join the UNO Q to the team's Wi-Fi once, and find its address:
 
@@ -128,6 +146,9 @@ sudo commands, SSH and su logins and failed passwords are picked up from the jou
 3. **On B,** press **Report to manager**. A's panel beeps three times and the alert sits at the top of A's control panel. B shows the row as REPORTED.
 4. **On A,** press **Acknowledge**, then the red button. The red LED lights, the top bar reads **Internet: CUT**, and a signed entry tells everyone. Chat between A and B keeps working.
 5. **On A,** press green once "backups are done". The green LED lights and the internet comes back. Only the manager's station can do this.
+6. **On A,** open **Report** (F7) and press **Write report**. In about 7 seconds it shows what happened, records lost and protected, the money estimate, deadlines and next steps. Paragraphs marked LOCAL MODEL were written by gemma3:4b on the laptop; every figure comes from the log. Saved as `station-a/report/report.md`.
+
+Before the steps, record what was hit on the Scope page (F4), for example `FS-01`, PII, TX, 4120, ENCRYPTED and `NAS-02`, OTHER, 18000, CLEAN. The report's lost and protected figures come from there.
 
 ### Rehearsing without losing the internet
 
@@ -148,6 +169,9 @@ Everything looks and logs the same, but the network stays up. Drop the two varia
 | Top bar says **Relay: alone** | The other station isn't connected yet, or the hub restarted. Restart that station. |
 | A station shows the unlock screen and the passphrase is lost | There's no recovery. Close it, `rm -rf station-a` (or `-b`), start over. |
 | Server log stays empty | `ark-watch` must point at the station directory of a running, unlocked station (`station-a`). Commands typed in a shell show only with the hook sourced in that shell. |
+| Report says "No local model summary: Ollama isn't running" | `ollama serve`, then Write again. |
+| Report says "the model isn't installed" | `ollama pull gemma3:4b` (needs the internet). |
+| Report takes 20 s or more | The model wasn't loaded. Run `tools/ark-report --warm` before the demo. |
 | Panel doesn't beep or light | Reflash `firmware/panel`. Station A must be started with `PANEL=/dev/ttyUSB0`. |
 
 ## Remaking the GIF
@@ -158,10 +182,15 @@ SDL_VIDEODRIVER=offscreen ./build/render_demo
 python3 tools/make-demo-gif.py                # writes docs/demo.gif
 ```
 
+Step 6 runs the real `tools/ark-report`, so start the model first; without it that frame shows a figures-only report.
+
 ## Shutting down
 
 Close both windows (each wipes its keys from memory), stop `ark-watch` with Ctrl+C, then:
 
 ```sh
 adb shell 'pkill -f "^python3 hub.py"'
+curl -s 127.0.0.1:11434/api/generate -d '{"model":"gemma3:4b","keep_alive":0}' >/dev/null   # frees the GPU
 ```
+
+`station-a/report/` keeps every report written, in plain text. Delete it with the station directory when the incident is closed.

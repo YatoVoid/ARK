@@ -23,8 +23,9 @@
 #define V_CLOCKS    4
 #define V_TEAM      5
 #define V_NETWORK   6
-#define V_GUIDE     7
-#define VIEWS       8
+#define V_REPORT    7
+#define V_GUIDE     8
+#define VIEWS       9
 
 #define FLD_SETUP    0
 #define FLD_COMPOSE  1
@@ -73,6 +74,13 @@
 #define H_EVENT      24
 #define H_REPORT     25
 #define H_SFILTER    26
+#define H_WRITE      27
+
+#define RS_NONE     0
+#define RS_RUNNING  1
+#define RS_DONE     2
+#define RS_FAILED   3
+#define REPORT_MAX  65536
 #define HITS         192
 
 // Layout.
@@ -95,7 +103,7 @@ U8 *g_phase_help[5] = {
   "removing the attacker and their tools",
   "restoring systems and watching for a return"
 };
-U8 *g_view_names[VIEWS] = {"Overview", "Server log", "Chat log", "Scope", "Breach clocks", "Team", "Network", "Guide"};
+U8 *g_view_names[VIEWS] = {"Overview", "Server log", "Chat log", "Scope", "Breach clocks", "Team", "Network", "Report", "Guide"};
 U8 *g_data_types[5] = {"PII", "PHI", "PCI", "CRED", "OTHER"};
 U8 *g_type_short[5] = {"names with SSN or ID", "health records", "card numbers", "logins, passwords", "anything else"};
 U8 *g_scope_status[5] = {"ENCRYPTED", "EXFILTRATED", "SUSPECTED", "CONTAINED", "CLEAN"};
@@ -207,6 +215,14 @@ class App
   I64 feed_window;        // start of the current rate window
   I64 feed_posted;        // events posted in it
   I64 feed_dropped;
+  I64 report_state;       // RS_ value
+  I64 report_started;
+  Bool report_warmed;
+  U8 report_msg[256];
+  U8 *report_text;        // DIR/report/report.md as last read
+  I64 report_len;
+  I64 report_scroll;
+  I64 report_max_scroll;
   Asset assets[MAX_ASSETS];
   I64 asset_count;
   Member members[MAX_MEMBERS];
@@ -940,6 +956,8 @@ U0 DrawSide(App *a)
       StrCpy(badge, "+1");
       bcol = C_CYAN;
     }
+    if (v == V_REPORT && a->report_state == RS_RUNNING)
+      StrCpy(badge, "...");
     if (v == V_NETWORK && a->st->rejected > 0) {
       snprintf(badge, 24, "%ld", a->st->rejected);
       bcol = C_RED;
@@ -2242,6 +2260,7 @@ U8 *g_guide_server[] = {
 U8 *g_guide_keys[] = {
   "F1 guide    F2 note    F3 chat    F5 alert",
   "F4 add affected system    F6 server log",
+  "F7 report: summary of the incident so far",
   "Ctrl+F search the page you're on",
   "F9 approve a join      F12 twice: lock station",
   "PgUp, PgDn or the wheel scroll the log.", NULL
@@ -2393,6 +2412,378 @@ U0 DrawSetup(App *a)
 
 // ---- whole frame ----------------------------------------------------------
 
+
+// ---- report ---------------------------------------------------------------
+//
+// The station exports its verified log to DIR/report/export.tsv, one record
+// per line, tab separated, and runs tools/ark-report in the background. The
+// tool writes DIR/report/report.md and DIR/report/status; PollReport waits
+// for the status to say done.
+
+extern "c" I32 rename(U8 *from, U8 *to);
+extern "c" I32 unlink(U8 *path);
+
+// Tabs and line breaks separate fields and records, so they become spaces.
+U8 *Tsv(U8 *dst, U8 *src, I64 max)
+{
+  I64 n = 0;
+  for (I64 i = 0; src[i] && n < max - 1; i++) {
+    U8 ch = src[i];
+    if (ch < 32)
+      ch = ' ';
+    dst[n++] = ch;
+  }
+  dst[n] = 0;
+  return dst;
+}
+
+U0 PutLine(I32 fd, U8 *line)
+{
+  I64 n = StrLen(line);
+  line[n] = '\n';
+  WriteAll(fd, line, n + 1);
+  line[n] = 0;
+}
+
+U8 *g_export_kind[9] = {"", "genesis", "note", "chat", "scope", "member", "alert", "network", "event"};
+
+Bool ExportReport(App *a)
+{
+  Log *log = a->st->log;
+  U8 *dir = StationPath(a->st, "report");
+  mkdir(dir, MODE_DIR);
+  Free(dir);
+  U8 *tmp = StationPath(a->st, "report/export.tsv.tmp");
+  I32 fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC, MODE_FILE);
+  if (fd < 0) {
+    Free(tmp);
+    return FALSE;
+  }
+  U8 *line = MAlloc(4096);
+  U8 *text = MAlloc(BODY_MAX + 128);
+  U8 *f1 = MAlloc(BODY_MAX + 128);
+  U8 f2[NAME_MAX], f3[NAME_MAX], title[96];
+
+  StrCpy(line, "ark-export\t1");
+  PutLine(fd, line);
+  IncidentTitle(log, title);
+  snprintf(line, 4096, "incident\t%s", Tsv(f1, title, 200));
+  PutLine(fd, line);
+  snprintf(line, 4096, "opened\t%ld", OpenedAt(log));
+  PutLine(fd, line);
+  snprintf(line, 4096, "written\t%ld", time(NULL));
+  PutLine(fd, line);
+  U8 *role = "member";
+  if (IsAdmin(a->st))
+    role = "manager";
+  snprintf(line, 4096, "station\t%s\t%s", Tsv(f1, a->st->name, NAME_MAX), role);
+  PutLine(fd, line);
+  snprintf(line, 4096, "phase\t%s", g_phase_names[IncidentPhase(a)]);
+  PutLine(fd, line);
+  snprintf(line, 4096, "integrity\t%ld\t%ld", log->problems, a->st->rejected);
+  PutLine(fd, line);
+
+  CollectMembers(a);
+  for (I64 i = 0; i < a->member_count; i++) {
+    role = "member";
+    if (a->members[i].admin)
+      role = "manager";
+    snprintf(line, 4096, "member\t%ld\t%s\t%s", a->members[i].time, Tsv(f1, a->members[i].name, NAME_MAX), role);
+    PutLine(fd, line);
+  }
+  CollectAssets(a);
+  for (I64 i = 0; i < a->asset_count; i++) {
+    Asset *as = &a->assets[i];
+    snprintf(line, 4096, "asset\t%ld\t%s\t%s\t%s\t%s\t%s", as->time, Tsv(f1, as->name, 32), as->type, as->where,
+             as->records, as->status);
+    PutLine(fd, line);
+  }
+  Clock clocks[RULES];
+  I64 nclocks = Deadlines(log, clocks);
+  for (I64 i = 0; i < nclocks; i++) {
+    I64 r = clocks[i].rule;
+    snprintf(line, 4096, "clock\t%ld\t%s\t%s\t%ld\t%ld", clocks[i].due, g_rule_who[r], g_rule_cite[r],
+             clocks[i].unsure, g_rule_hours[r]);
+    PutLine(fd, line);
+  }
+
+  RefreshRisk(a);
+  LogSorted(log, a->order);
+  for (I64 k = 0; k < log->count; k++) {
+    I64 idx = a->order[k];
+    Entry *e = &log->entries[idx];
+    if (e->status != ST_OK || e->kind < 1 || e->kind > 8)
+      continue;
+    NameOf(log, e->author, f2);
+    Tsv(f2, f2, NAME_MAX);
+    if (e->kind == KIND_EVENT) {
+      Event ev;
+      if (!EventFromBody(e->body, &ev))
+        continue;
+      U8 ref[12];
+      EntryRef(e, ref);
+      Entry *rep = ReportOf(a, e);
+      I64 rep_time = 0;
+      StrCpy(f3, "-");
+      if (rep != NULL) {
+        NameOf(log, rep->author, f3);
+        Tsv(f3, f3, NAME_MAX);
+        rep_time = rep->time;
+      }
+      snprintf(line, 4096, "event\t%ld\t%s\t%s\t%s\t%s\t%ld\t%s\t%s\t%ld\t%s", e->time, ref,
+               g_ev_source[ev.source], ev.user, ev.host, a->risk[idx], a->why[idx], f3, rep_time,
+               Tsv(f1, ev.detail, BODY_MAX));
+    } else {
+      U8 ref[12];
+      StrCpy(ref, "-");
+      if (e->kind == KIND_ALERT && AlertText(e->body) != e->body) {
+        MemCpy(ref, e->body + 1, 8);
+        ref[8] = 0;
+      }
+      EntryText(log, e, text);
+      snprintf(line, 4096, "entry\t%ld\t%s\t%s\t%s\t%s\t%s", e->time, g_export_kind[e->kind],
+               g_phase_names[MinI64(MaxI64(e->phase, 0), 4)], f2, ref, Tsv(f1, text, BODY_MAX));
+    }
+    PutLine(fd, line);
+  }
+  close(fd);
+  U8 *path = StationPath(a->st, "report/export.tsv");
+  Bool ok = rename(tmp, path) == 0;
+  Free(path);
+  Free(tmp);
+  Free(line);
+  Free(text);
+  Free(f1);
+  return ok;
+}
+
+I64 ReadSmall(U8 *path, U8 *buf, I64 max)
+{
+  I32 fd = open(path, O_RDONLY);
+  if (fd < 0)
+    return -1;
+  I64 n = 0;
+  while (n < max - 1) {
+    I64 got = read(fd, buf + n, max - 1 - n);
+    if (got <= 0)
+      break;
+    n += got;
+  }
+  close(fd);
+  buf[n] = 0;
+  return n;
+}
+
+Bool LoadReport(App *a)
+{
+  if (a->report_text == NULL)
+    a->report_text = MAlloc(REPORT_MAX);
+  U8 *path = StationPath(a->st, "report/report.md");
+  a->report_len = ReadSmall(path, a->report_text, REPORT_MAX);
+  Free(path);
+  if (a->report_len < 0) {
+    a->report_len = 0;
+    a->report_text[0] = 0;
+    return FALSE;
+  }
+  return TRUE;
+}
+
+U8 *ReportTool()
+{
+  U8 *cmd = getenv("ARK_REPORT_CMD");
+  if (cmd == NULL || cmd[0] == 0)
+    return "tools/ark-report";
+  return cmd;
+}
+
+// Loads the model in the background the first time the Report page opens,
+// so pressing Write report doesn't wait for it.
+U0 WarmReport(App *a)
+{
+  if (a->report_text == NULL && a->report_state == RS_NONE && LoadReport(a)) {
+    a->report_state = RS_DONE;
+    StrCpy(a->report_msg, "Saved earlier. Write it again to include what has happened since.");
+  }
+  if (a->report_warmed)
+    return;
+  a->report_warmed = TRUE;
+  U8 cmd[600];
+  snprintf(cmd, 600, "%s --warm >/dev/null 2>&1 &", ReportTool());
+  system(cmd);
+}
+
+U0 WriteReport(App *a)
+{
+  if (a->report_state == RS_RUNNING)
+    return;
+  if (strchr(a->st->dir, '\'') != NULL) {
+    Say(a, "The station directory name has a quote in it; rename it to write a report.", C_RED_FG);
+    return;
+  }
+  if (!ExportReport(a)) {
+    a->report_state = RS_FAILED;
+    StrCpy(a->report_msg, "Could not write the export into the station directory.");
+    return;
+  }
+  U8 *status = StationPath(a->st, "report/status");
+  unlink(status);
+  Free(status);
+  U8 cmd[900];
+  snprintf(cmd, 900, "%s '%s' >'%s/report/run.log' 2>&1 &", ReportTool(), a->st->dir, a->st->dir);
+  system(cmd);
+  a->report_state = RS_RUNNING;
+  a->report_started = time(NULL);
+  a->report_warmed = TRUE;
+  StrCpy(a->report_msg, "");
+}
+
+// Checks whether tools/ark-report has finished.
+U0 PollReport(App *a)
+{
+  if (a->report_state != RS_RUNNING)
+    return;
+  U8 buf[300];
+  U8 *path = StationPath(a->st, "report/status");
+  I64 n = ReadSmall(path, buf, 300);
+  Free(path);
+  if (n > 0 && buf[n - 1] == '\n')
+    buf[--n] = 0;
+  if (n > 5 && StrNCmp(buf, "done ", 5) == 0) {
+    // "done SECONDS ai|figures NOTE"
+    U8 *rest = buf + 5;
+    U8 *sp = strchr(rest, ' ');
+    U8 secs[16];
+    CopyText(secs, rest, MinI64(16, (sp - rest) + 1));
+    Bool ai = sp != NULL && StrNCmp(sp + 1, "ai", 2) == 0;
+    U8 *note = NULL;
+    if (sp != NULL)
+      note = strchr(sp + 1, ' ');
+    if (ai)
+      snprintf(a->report_msg, 256, "Written in %s s. Summary by the local model, figures from the log.", secs);
+    else if (note != NULL)
+      snprintf(a->report_msg, 256, "Written in %s s from the figures only.%s", secs, note);
+    else
+      snprintf(a->report_msg, 256, "Written in %s s from the figures only.", secs);
+    LoadReport(a);
+    a->report_scroll = 0;
+    a->report_state = RS_DONE;
+    a->dirty = TRUE;
+  } else if (n > 6 && StrNCmp(buf, "error ", 6) == 0) {
+    snprintf(a->report_msg, 256, "The report failed: %s", buf + 6);
+    a->report_state = RS_FAILED;
+    a->dirty = TRUE;
+  } else if (time(NULL) - a->report_started > 180) {
+    U8 *log = "report/run.log";
+    snprintf(a->report_msg, 256, "No answer from %s after 3 minutes. See %s/%s.", ReportTool(), a->st->dir, log);
+    a->report_state = RS_FAILED;
+    a->dirty = TRUE;
+  }
+}
+
+// Draws one line of the report's markdown. Returns the height it takes.
+I64 ReportLine(App *a, U8 *src, I64 len, I64 x, I64 y, I64 w, Bool draw)
+{
+  Canvas *c = a->cv;
+  U8 line[1200];
+  I64 n = 0;
+  for (I64 i = 0; i < len && n < 1199; i++)
+    if (src[i] != '`')
+      line[n++] = src[i];
+  line[n] = 0;
+  if (n == 0)
+    return 8;
+  I64 starts[16], lens[16];
+  if (n > 2 && line[0] == '#' && line[1] == ' ') {
+    I64 rows = Wrap(c, F_H1, line + 2, w, starts, lens, 3);
+    for (I64 i = 0; draw && i < rows; i++)
+      Text(c, F_H1, x, y + i * 30, line + 2 + starts[i], C_TEXT, w, lens[i]);
+    return rows * 30 + 6;
+  }
+  if (n > 3 && line[0] == '#' && line[1] == '#' && line[2] == ' ') {
+    U8 *head = line + 3;
+    U32 col = C_TEXT;
+    U8 *model = strstr(head, " (local model)");
+    if (draw) {
+      I64 tx = Text(c, F_H2, x, y + 14, head, col, w, MaxI64(0, StrLen(head) - (model != NULL) * 14));
+      if (model != NULL)
+        Badge(a, tx + 10, y + 24, "LOCAL MODEL", C_PURPLE);
+      HLine(c, x, y + 40, w, C_LINE);
+    }
+    return 50;
+  }
+  if (n > 2 && line[0] == '-' && line[1] == ' ') {
+    I64 rows = Wrap(c, F_BODY, line + 2, w - 18, starts, lens, 16);
+    if (draw) {
+      Dot(c, x + 4, y + 10, 4, C_FAINT);
+      for (I64 i = 0; i < rows; i++)
+        Text(c, F_BODY, x + 18, y + i * 20, line + 2 + starts[i], C_TEXT, w - 18, lens[i]);
+    }
+    return rows * 20 + 4;
+  }
+  I64 rows = Wrap(c, F_BODY, line, w, starts, lens, 16);
+  for (I64 i = 0; draw && i < rows; i++)
+    Text(c, F_BODY, x, y + i * 20, line + starts[i], C_TEXT, w, lens[i]);
+  return rows * 20 + 2;
+}
+
+U0 DrawReportPage(App *a)
+{
+  Canvas *c = a->cv;
+  I64 cw = g_cw - SIDE_W - PANEL_W - 2 * PAD;
+  PageHead(a, "Report", "For the company: what happened, what was lost and saved, the deadlines.");
+  I64 y = TOP_H + 84;
+  Card(a, CX0, y, cw, 76);
+  U8 *head = "No report yet";
+  U8 line[300];
+  StrCpy(line, "Figures come from the signed log. A model running on this laptop writes the summary; nothing leaves it.");
+  U32 hcol = C_TEXT;
+  if (a->report_state == RS_RUNNING) {
+    head = "Writing the report";
+    snprintf(line, 300, "Working out the figures and asking the local model. %ld s so far.", time(NULL) - a->report_started);
+    hcol = C_CYAN_FG;
+  } else if (a->report_state == RS_DONE) {
+    head = "Report written";
+    CopyText(line, a->report_msg, 300);
+    hcol = C_GREEN_FG;
+  } else if (a->report_state == RS_FAILED) {
+    head = "Report failed";
+    CopyText(line, a->report_msg, 300);
+    hcol = C_RED_FG;
+  }
+  Text(c, F_H2, CX0 + 20, y + 16, head, hcol, cw - 220);
+  Text(c, F_SMALL, CX0 + 20, y + 44, line, C_MUTED, cw - 220);
+  if (a->report_state == RS_RUNNING)
+    Button(a, CX0 + cw - 180, y + 20, 160, 36, "Writing...", BTN_OFF, 0);
+  else if (a->report_state == RS_DONE)
+    Button(a, CX0 + cw - 180, y + 20, 160, 36, "Write again", BTN_GHOST, H_WRITE);
+  else
+    Button(a, CX0 + cw - 180, y + 20, 160, 36, "Write report", BTN_PRIMARY, H_WRITE);
+
+  y += 92;
+  I64 h = g_ch - 20 - y;
+  Card(a, CX0, y, cw, h);
+  if (a->report_len == 0) {
+    TextMid(c, F_BODY, CX0 + 24, y + 40, "The report shows here. It's also saved as report/report.md in the station directory.", C_FAINT, cw - 48);
+    a->report_max_scroll = 0;
+    return;
+  }
+  I64 x = CX0 + 28, w = cw - 56;
+  Clip(c, CX0 + 1, y + 1, cw - 2, h - 2);
+  I64 ty = y + 24 - a->report_scroll;
+  U8 *t = a->report_text;
+  I64 start = 0;
+  for (I64 i = 0; i <= a->report_len; i++) {
+    if (i == a->report_len || t[i] == '\n') {
+      Bool visible = ty < y + h && ty > y - 200;
+      ty += ReportLine(a, t + start, i - start, x, ty, w, visible);
+      start = i + 1;
+    }
+  }
+  ClipAll(c);
+  a->report_max_scroll = MaxI64(0, ty + a->report_scroll - (y + 24) - h + 48);
+}
+
 U0 Draw(App *a)
 {
   Canvas *c = a->cv;
@@ -2417,6 +2808,8 @@ U0 Draw(App *a)
       DrawTeamPage(a);
     else if (a->view == V_NETWORK)
       DrawNetworkPage(a);
+    else if (a->view == V_REPORT)
+      DrawReportPage(a);
     else
       DrawGuidePage(a);
     DrawSide(a);
@@ -2775,6 +3168,8 @@ U0 Act(App *a, I64 id, I64 arg)
     a->view = arg;
     a->scroll = 0;
     a->server_scroll = 0;
+    if (arg == V_REPORT)
+      WarmReport(a);
   } else if (id == H_FOCUS) {
     a->focus = arg;
   } else if (id == H_PHASE) {
@@ -2831,6 +3226,8 @@ U0 Act(App *a, I64 id, I64 arg)
   } else if (id == H_SFILTER) {
     a->server_filter = arg;
     a->server_scroll = 0;
+  } else if (id == H_WRITE) {
+    WriteReport(a);
   }
 }
 
@@ -2954,8 +3351,15 @@ U0 OnKey(App *a, I64 sym, I64 mod)
     a->focus = FLD_COMPOSE;
   } else if (sym == KEY_F6) {
     a->view = V_SERVER;
+  } else if (sym == KEY_F7) {
+    a->view = V_REPORT;
+    WarmReport(a);
   } else if (sym == KEY_F9) {
     Approve(a);
+  } else if (a->view == V_REPORT && sym == KEY_PAGEUP) {
+    a->report_scroll = MaxI64(0, a->report_scroll - 400);
+  } else if (a->view == V_REPORT && sym == KEY_PAGEDOWN) {
+    a->report_scroll = MinI64(a->report_scroll + 400, a->report_max_scroll);
   } else if (a->view == V_SERVER && sym == KEY_PAGEUP) {
     a->server_scroll = MaxI64(0, a->server_scroll - 10);
   } else if (a->view == V_SERVER && sym == KEY_PAGEDOWN) {
@@ -2970,6 +3374,10 @@ U0 OnKey(App *a, I64 sym, I64 mod)
 
 U0 OnWheel(App *a, I64 dy)
 {
+  if (Ready(a) && a->view == V_REPORT) {
+    a->report_scroll = MaxI64(0, MinI64(a->report_scroll - dy * 60, a->report_max_scroll));
+    return;
+  }
   if (Ready(a) && a->view == V_SERVER) {
     a->server_scroll = MaxI64(0, MinI64(a->server_scroll - dy * 3, MaxI64(0, EventCount(a) - 1)));
     return;

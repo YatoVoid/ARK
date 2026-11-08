@@ -12,6 +12,8 @@ Tested on Arch Linux (kernel 7.2, KDE Wayland), November 2026.
 | libsodium | `libsodium` | 1.0.22 |
 | socat (tests only) | `socat` | |
 | arduino-cli (firmware) | `arduino-cli` | 1.5.1 |
+| Ollama (report summary, optional) | [ollama.com/download](https://ollama.com/download) | 0.40.10 |
+| gemma3:4b model (3.4 GB) | `ollama pull gemma3:4b` | |
 
 ```sh
 sudo pacman -S sdl2-compat sdl2_ttf libsodium socat arduino-cli
@@ -31,6 +33,18 @@ hcc: follow the [holyc-lang install guide](https://holyc-lang.com/docs/intro), o
 hcc tests/render_views.HC -o build/render_views
 SDL_VIDEODRIVER=offscreen ./build/render_views     # writes build/ui-*.ppm
 ```
+
+## Report model
+
+The Report page works without a model; it then writes the figures only. For the summary paragraphs:
+
+```sh
+ollama pull gemma3:4b        # once, needs the internet
+ollama serve                 # if the ollama service isn't running
+tools/ark-report --warm      # optional: load it before the demo
+```
+
+Tested on an RTX 3050 Laptop GPU with 6 GB: about 7 s per report once loaded. Another model: `ARK_REPORT_MODEL=qwen2.5:3b`. `OLLAMA_HOST` must point at this machine; the tool refuses anything else.
 
 ## Serial port access
 

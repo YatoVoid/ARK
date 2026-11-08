@@ -21,6 +21,8 @@ run test_deadlines
 SDL_VIDEODRIVER=offscreen run test_ui
 echo "== test_watch"
 python3 -I tests/test_watch.py || failed=1
+echo "== test_report"
+python3 -I tests/test_report.py || failed=1
 
 tmp=$(mktemp -d)
 socat "pty,raw,echo=0,link=$tmp/a" "pty,raw,echo=0,link=$tmp/b" &

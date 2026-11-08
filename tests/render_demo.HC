@@ -61,6 +61,26 @@ U8 *g_feed[8] = {
   "shell\tsvc-backup\tfs-01\thistory -c"
 };
 
+U8 *g_scope[4] = {
+  "FS-01|PII|TX|4120|ENCRYPTED",
+  "imaging-archive|PHI|-|412|EXFILTRATED",
+  "HR-DB|PII|TX|?|SUSPECTED",
+  "NAS-02|OTHER|-|18000|CLEAN"
+};
+
+// The render runs in about a second, so every entry carries the same time.
+// For the report only, entries are given the times the story would take:
+// minutes between the intrusion steps, hours before the restore.
+// genesis, member, note, chat, 4 scope, 8 events, report, cut, restore
+I64 g_story[19] = {0, 30, 60, 120, 950, 960, 970, 980, 300, 330, 600, 640, 700, 760, 800, 830, 900, 1060, 10660};
+
+U0 SpreadTimes(Log *log)
+{
+  I64 base = log->entries[0].time - 11000;
+  for (I64 i = 0; i < log->count && i < 19; i++)
+    log->entries[i].time = base + g_story[i];
+}
+
 I32 Main(I32 argc, U8 **argv)
 {
   CryptoInit();
@@ -101,6 +121,9 @@ I32 Main(I32 argc, U8 **argv)
   Deliver(a->st, b->st);
   PostAndSend(b, KIND_CHAT, PHASE_DETECT, "On it. I have the server log open.", 34);
   Deliver(b->st, a->st);
+  for (I64 i = 0; i < 4; i++)
+    PostAndSend(a, KIND_SCOPE, PHASE_DETECT, g_scope[i], StrLen(g_scope[i]));
+  Deliver(a->st, b->st);
   SeePeer(a, b->st);
   SeePeer(b, a->st);
   a->scroll = 0;
@@ -154,6 +177,18 @@ I32 Main(I32 argc, U8 **argv)
   a->view = V_NETWORK;
   Shot(a, "5", "a");
   Shot(b, "5", "b");
+
+  // 6. The manager writes the report for the company.
+  SpreadTimes(a->st->log);
+  setenv("ARK_COST_PER_RECORD", "160", 1);
+  ExportReport(a);
+  system("tools/ark-report build/tmp-demo-a >/dev/null");
+  a->view = V_REPORT;
+  a->report_state = RS_RUNNING;
+  PollReport(a);
+  b->view = V_LOG;
+  Shot(a, "6", "a");
+  Shot(b, "6", "b");
 
   Free(msg);
   "rendered demo\n";

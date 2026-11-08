@@ -102,3 +102,12 @@ Both were found by bisecting the include list with a stub `Main`. A build that p
 ## 2026-11-07 night, demo runbook and GIF
 
 `docs/DEMO.md` holds every command: setup, clean slate, relay, one or two laptops, feeding the server log, the five-step story, rehearsing with stand-in cut commands. `docs/demo.gif` is drawn from the code: `tests/render_demo.HC` runs a manager and a worker station through that story in one process and dumps each screen, and `tools/make-demo-gif.py` adds the hardware and which links each step uses. Rendering it showed the chat log printing an alert's internal `[ref]`; it's hidden now.
+
+## 2026-11-07 late night, the report
+
+A Report page (F7) writes an after-incident report for the company: what happened, what was lost and protected, money at a cost per record, deadlines, next steps. The station exports its verified log, `tools/ark-report` computes the figures and asks a local model through Ollama for the paragraphs (decision 16). About 7 s per report on the RTX 3050 once the model is loaded.
+
+- The Ollama system service on the dev laptop was crash-looping (it couldn't create `/var/lib/ollama`), so the model runs from `ollama serve` as the user.
+- The first number guard allowed any number found anywhere in the prompt. Writing the injection test showed the hole: a command the attacker types can carry a number. Only numbers in the computed figures, and log time stamps, are allowed now.
+- A cold first request was about 5 s slower than the next one even with the model loaded, so `--warm` runs one token instead of only loading.
+- The render runs in a second, so every demo entry had the same time and the report said "under a minute" for everything. `render_demo` gives entries the times the story would take before exporting; the GIF says so on that frame.

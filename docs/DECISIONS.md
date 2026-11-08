@@ -112,3 +112,14 @@ The log had become a group chat. What an analyst needs during an attack is the r
 - **The journal is the source.** sudo, sshd and su already log there with the real user. Typed commands get there through a one-line shell hook calling `logger`. auditd would see more (every `execve`), but it isn't installed by default and needs root to set up.
 - **Flagging is a hint, not a verdict.** A worker reads the flagged rows and decides; Report to manager is one click and names the exact event. The manager's buzzer stays for things a person decided were worth it, otherwise a noisy server would keep it going all day.
 - **Risk is computed when drawn**, not stored, so the rules can improve without rewriting history.
+
+## 16. A report written by a local model, with figures from code
+
+After an incident the company wants one document: what happened, what was lost, what was protected, what it costs, which deadlines run. ARK already holds all of it in the log.
+
+- **Figures come from code, never from the model.** Records, times, money and deadlines are computed from the export. The model only writes the paragraphs around them. A small model gets numbers wrong, and a wrong number in a document for lawyers is worse than none.
+- **The model runs on the laptop.** Ollama on 127.0.0.1; the tool refuses any other host. Sending the incident to a cloud API would break the reason ARK exists, and it has to work while the internet is cut.
+- **The server log is attacker input.** Commands the attacker typed go into the prompt. They are fenced off and marked as evidence, the answer has a fixed JSON shape, and any sentence with a number that isn't in the figures is dropped. Numbers inside log text don't count, so a command like `echo "$5,000,000 saved"` can't become a figure.
+- **gemma3:4b, chosen by trying three** on the same export on an RTX 3050 with 6 GB. qwen2.5:3b (9 s) read the system name "imaging-archive" as "imaged and archived" and called the laptop cut "isolating the server". qwen3:4b-instruct (12 s) was detailed but said 4,532 records were exfiltrated when 4,120 were encrypted. gemma3:4b (6 to 7 s) told the attack in the right order with no figure wrong.
+- **Money is an input.** ARK records no costs. The estimate is records times a cost per record the team sets (`ARK_COST_PER_RECORD`), stated next to every amount. Without it the report has no money figures.
+- **The report is plain text on disk** (mode 0600), unlike the log, which stays sealed. It is meant to be handed over. The decrypted export it is built from is deleted as soon as the tool has read it.

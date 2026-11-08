@@ -31,6 +31,7 @@ BOXES = {
     "b": (1150, 690, 240, 84, "Laptop B, worker", "station-b, Marcus Hale"),
     "net": (40, 860, 240, 84, "Internet", "and the company network"),
     "panel": (400, 860, 240, 84, "Arduino UNO, panel", "red CUT, green RESTORE, buzzer"),
+    "model": (1150, 860, 240, 84, "Local AI model", "gemma3:4b on laptop A, offline"),
 }
 # Links: name -> (from, to, label)
 LINKS = {
@@ -39,6 +40,7 @@ LINKS = {
     "wifi": ("q", "b", "separate Wi-Fi"),
     "net": ("net", "a", "network"),
     "serial": ("panel", "a", "USB serial"),
+    "model": ("a", "model", "on the laptop"),
 }
 
 STEPS = [
@@ -72,6 +74,12 @@ STEPS = [
         "hot": {"serial": GREEN, "net": GREEN, "usb": CYAN, "wifi": CYAN},
         "led": GREEN, "note": "green button pressed",
     },
+    {
+        "title": "6  The manager writes the report for the company",
+        "sub": "ARK works out the figures from the signed log. A model on laptop A writes the summary in about 7 seconds, offline.",
+        "hot": {"model": AMBER},
+        "led": GREEN, "note": "",
+    },
 ]
 
 
@@ -94,6 +102,8 @@ def link_points(name):
         return mid(BOXES["net"], "r"), (BOXES["a"][0] + 40, BOXES["a"][1] + 84)
     if name == "serial":
         return mid(BOXES["panel"], "t"), mid(BOXES["a"], "b")
+    if name == "model":
+        return (BOXES["a"][0] + BOXES["a"][2] - 40, BOXES["a"][1] + BOXES["a"][3]), mid(BOXES["model"], "l")
     return mid(BOXES[a], "r"), mid(BOXES[b], "l")
 
 
@@ -133,6 +143,8 @@ def frame(step, n, shots, out):
             text(mvg, REG, 13, color if state else FAINT, lx + 14, ly + 4, label)
         elif name == "net":
             text(mvg, REG, 13, color if state else FAINT, lx - tw - 26, ly + 22, label)
+        elif name == "model":
+            text(mvg, REG, 13, color if state else FAINT, lx - tw // 2 + 30, ly - 12, label)
         else:
             text(mvg, REG, 13, color if state else FAINT, lx - tw // 2, ly + 24, label)
 
@@ -158,6 +170,8 @@ def frame(step, n, shots, out):
         color = AMBER if "beep" in step["note"] else step["led"]
         text(mvg, SEMI, 15, color, px + 150, py + 42, step["note"])
 
+    if n == 6:
+        text(mvg, REG, 12, FAINT, 1060, 975, "For the report, entries carry the times the story would take.")
     text(mvg, REG, 12, FAINT, 1060, 990, "Screens drawn by the ARK code (tests/render_demo.HC). Messages are handed")
     text(mvg, REG, 12, FAINT, 1060, 1005, "between stations directly in the render; in use they go through the relay.")
 
@@ -191,7 +205,8 @@ def main():
         cmd += ["-delay", "550" if i == len(frames) - 1 else "450", f]
     cmd += ["-loop", "0", "-dither", "None", "-colors", "128", "-layers", "Optimize", gif]
     subprocess.run(cmd, check=True)
-    subprocess.run(["magick", frames[2], os.path.join(build, "demo-frame-3.png")], check=True)
+    for i, f in enumerate(frames, 1):
+        subprocess.run(["magick", f, os.path.join(build, "demo-frame-%d.png" % i)], check=True)
     print("wrote", os.path.relpath(gif, ROOT), "%d KB" % (os.path.getsize(gif) // 1024))
 
 

@@ -3,3 +3,21 @@ build/
 station-*/
 tools/vscode-holyc/*.vsix
 __pycache__/
+
+# editor and assistant config, kept local
+CLAUDE.md
+CLAUDE.local.md
+.claude/
+AGENTS.md
+GEMINI.md
+.gemini/
+.cursor/
+.cursorrules
+.windsurf/
+.windsurfrules
+.aider*
+.codex/
+.github/copilot-instructions.md
+.mcp.json
+anti-slop/
+.night-shift/
