@@ -2,57 +2,104 @@
 
 An incident command center that runs off the network it is protecting.
 
-During a cyber incident you have to assume the attacker can read the company's email, chat, ticketing and file shares. ARK gives the response team a place to record the incident, track what data was hit and talk to each other, without touching any of that. Stations talk through a relay box on its own Wi-Fi. Every entry is encrypted with a team key and signed by its author, and the log is hash-chained, so a relay that has been tampered with can drop messages but can't read them or forge them.
+During a cyber incident you have to assume the attacker can read the company's email, chat, tickets and file shares. ARK gives the response team somewhere else to work: a shared log of what happened, what data was hit, which legal clocks are running and who decided what. Stations talk through a small relay on its own Wi-Fi. Every entry is encrypted with a team key and signed by its author, and each author's entries are hash-chained, so a relay that has been tampered with can drop messages but can't read or forge them.
 
-ARK is written in HolyC (compiled with [hcc](https://github.com/Jamesbarford/holyc-lang)) with SDL2 and SDL2_ttf for the window and libsodium for the cryptography. It's kept small enough for one person to read all of it.
+ARK is written in HolyC (compiled with [hcc](https://github.com/Jamesbarford/holyc-lang)), with SDL2 and SDL2_ttf for the window and libsodium for the cryptography. One person can read all of it.
 
 > "An idiot admires complexity, a genius admires simplicity."
 > Terry A. Davis
 
-![A worker reports a suspicious server command, the manager's panel buzzes, the manager cuts the internet, restores it, and writes the report](docs/demo.gif)
+![An analyst reports a suspicious server command, the manager's panel buzzes, the manager cuts the internet, restores it, and writes the report](docs/demo.gif)
 
-How to run this yourself, from a clean slate: [docs/DEMO.md](docs/DEMO.md).
+Built solo for HackUTD 2026, Winstead PC track (Cyber Incident Response Dashboard).
 
-## Status
+## What it does
 
-Built for HackUTD (Winstead PC track: Cyber Incident Response Dashboard), November 2026. Work in progress.
+- **Two roles.** The station that starts the incident is the manager. Everyone who joins afterwards is an analyst, admitted by the manager after checking a six-digit code. Each window's title says which role it has, e.g. `ARK  Manager: Dana Kessler`.
+- **Server log.** `tools/ark-watch` reads sudo, SSH, su, account changes, typed shell commands and web requests on the watched server. Each one is signed into the log, and known attack steps are flagged SUSPICIOUS. An analyst sends one to the manager with **Report to manager**.
+- **Kill switch.** The manager's Arduino panel buzzes when an alert arrives. Red cuts that laptop off the internet and green restores it. ARK keeps working over the relay the whole time. The same buttons are on screen.
+- **Phases.** DETECT, CONTAIN, ERADICATE, RECOVER. Only the manager moves the incident. An analyst who clicks a phase sends the manager a request, and the manager gets a **Move to** button for it.
+- **Scope and breach clocks.** Record which systems were hit, what data they held and whether it was lost. Notification deadlines (Texas, Texas AG, California, New York, GDPR, HIPAA) start from that.
+- **Report.** A PDF for the company: timeline, records lost and protected, money at a cost per record, deadlines, next steps. The figures come from the log. A model on the same laptop writes the summary, and every sentence cites the figures it rests on.
+- **Colour for skimming.** Red is act now (ALERT, CUT, ENCRYPTED, EXFILTRATED). Yellow is check it (SUSPECTED, WATCH). Green is safe (CLEAN, CONTAINED, RESTORED). Each phase has its own colour. Chat is grey.
 
-| Part | State |
-|---|---|
-| libsodium bindings (sign, secretbox, sealed box, hash) | done, tested |
-| Serial link + frame chunking | done, tested over fake serial ports |
-| Incident log: signed entries, per-author hash chains, fork and gap detection | done, tested |
-| Passphrase-sealed identity and keys on disk | done, tested |
-| Relay hub on an Arduino UNO Q, stations over USB and Wi-Fi | done, tested over real Wi-Fi |
-| Station window: overview, server log, chat log, scope form, breach clocks, team, network, guide, on-screen control panel; resizable, text drawn at screen resolution | done, tested (`test_ui`), rendered at 1366x768 to 2560x1440 |
-| Server log: shell commands, sudo, logins, failed logins and web requests from `tools/ark-watch`, flagged by attack-step rules, reported to the manager in one click | done, tested (`test_ui`, `test_watch`); watcher tested live on Arch |
-| Arduino panel: red CUT takes the machine off the internet, green RESTORE brings it back (manager's station only), LEDs show which, buzzer for alerts | flashed; beeps and LEDs checked by hand, real `nmcli` cut not yet run |
-| Breach-notification clocks (TX, TX AG, CA, NY, GDPR, HIPAA) | done, tested |
-| Report for the company as a PDF: timeline, lost and protected, money at a cost per record, deadlines; figures from the log, summary and next steps from a local model (gemma3:4b through Ollama, offline), every sentence citing its source | done, tested (`test_report`, `test_ui`); about 7 to 8 s per report on an RTX 3050 |
-| Start over: clear a station from setup, the unlock screen or the Team page (two presses) | done, tested (`test_ui`) |
+## Try it on one laptop
 
-## Hardware
-
-- One laptop running Linux.
-- An Arduino UNO Q running `relay/hub.py`. One station connects over USB, the others over Wi-Fi.
-- Optional: an Arduino UNO (or clone) running `firmware/panel`: the manager's internet kill switch (red), restore (green) and alert buzzer.
-- `socat` on the laptop, to turn a TCP connection into the serial port the station expects.
-
-## Running the demo
-
-Every command, in order. [docs/DEMO.md](docs/DEMO.md) explains each step and has troubleshooting.
+No hardware needed. The relay hub runs on the laptop and both stations connect to it.
 
 **Install and build** (Arch; other distros in [docs/BUILDING.md](docs/BUILDING.md); hcc is built from source):
 
 ```sh
-sudo pacman -S sdl2-compat sdl2_ttf libsodium socat arduino-cli android-tools python-reportlab
+sudo pacman -S sdl2-compat sdl2_ttf libsodium socat python-reportlab
 hcc src/main.HC -o build/ark
-./tests/run.sh
+./tests/run.sh                                 # ends with ALL TESTS PASSED
 ```
+
+**Start the hub and both windows**, each in its own terminal:
+
+```sh
+python3 relay/hub.py                                                    # terminal 1: relay
+ARK_CUT_CMD=true ARK_RESTORE_CMD=true ./station.sh station-a wifi 127.0.0.1   # terminal 2: window A, manager
+./station.sh station-b wifi 127.0.0.1                                    # terminal 3: window B, analyst
+```
+
+`ARK_CUT_CMD=true` and `ARK_RESTORE_CMD=true` stand in for `nmcli networking off/on`, so pressing CUT doesn't take your laptop offline. Leave them out only when you mean it. The hub listens on port 4210 on every interface. It only ever sees sealed lines.
+
+**In the windows:**
+
+1. **Window A:** type a name, a passphrase twice, then **Start an incident** and a title such as `Ransomware on FS-01`.
+2. **Window B:** name, passphrase twice, **Join an incident**. It shows a six-digit code.
+3. **Window A:** open Team, check the code matches the one on B and press **Approve** (or F9). B now has the team key and the whole log.
+4. **Window A:** record what was hit on Scope (F4), e.g. `FS-01`, PII, TX, 4120 records, ENCRYPTED, and `NAS-02`, OTHER, 18000, CLEAN.
+
+**Simulate an attack.** In a fourth terminal, point the watcher at the manager's station:
+
+```sh
+tools/ark-watch station-a
+```
+
+Then, in a fifth, run the drill. It writes seven attacker-style commands to the journal, three seconds apart, and runs none of them:
+
+```sh
+tools/drill.sh                                 # whoami, cat /etc/shadow, tar the payroll share, curl it out, add an SSH key, history -c
+DRILL_GAP=6 tools/drill.sh                     # slower, for presenting
+```
+
+To be the attacker by hand instead, load the shell hook and type commands. Every command typed in that shell is logged, and it does run:
+
+```sh
+source tools/hooks/ark-shell.zsh               # or ark-shell.bash / ark-shell.fish
+cat /etc/shadow                                # fails without sudo, still logged and flagged
+```
+
+**The story to show:**
+
+1. Rows appear on both windows' Server log (F6). The flagged ones are red, and the sidebar counts the ones nobody has reported.
+2. **Window B:** filter to Suspicious, click `cat /etc/shadow`, press **Report to manager**.
+3. **Window A:** the alert sits at the top of the control panel. **Acknowledge**, then **CUT NETWORK** twice within 3 seconds. Both windows show A's laptop as off the internet, and chat keeps working.
+4. **Window B:** click ERADICATE in the top bar. A gets the request with a **Move to ERADICATE** button.
+5. **Window A:** **RESTORE NETWORK** once the systems are backed up.
+6. **Either window:** Report (F7), **Request report**. The PDF opens by itself.
+
+The report's summary needs Ollama with gemma3:4b (see [Report](#report)). Without it the PDF is still written, from the figures and timeline only.
+
+## Full demo with the hardware
+
+| Machine | Role | Runs |
+|---|---|---|
+| Laptop A | manager | `station-a`, `tools/ark-watch`, the Arduino UNO panel on USB, Ollama |
+| Laptop B | analyst | `station-b` |
+| Arduino UNO Q | relay | `relay/hub.py`, the ARK animation on its LED matrix |
+| Arduino UNO | manager's panel | `firmware/panel`: red CUT, green RESTORE, two LEDs, buzzer |
+
+Laptop A reaches the relay over USB. Laptop B reaches it over a Wi-Fi network the team controls, never the company network.
 
 **Once, while you still have internet:**
 
 ```sh
+sudo pacman -S arduino-cli android-tools
+sudo usermod -aG uucp "$USER"                  # serial port access; log out and back in
+
 # panel (close the Arduino IDE first; its serial monitor holds the port)
 arduino-cli compile --fqbn arduino:avr:uno firmware/panel
 arduino-cli upload --fqbn arduino:avr:uno -p /dev/ttyUSB0 firmware/panel
@@ -61,6 +108,8 @@ arduino-cli upload --fqbn arduino:avr:uno -p /dev/ttyUSB0 firmware/panel
 adb devices
 adb shell mkdir -p /home/arduino/ark
 adb push relay/hub.py /home/arduino/ark/hub.py
+adb shell nmcli dev wifi connect SSID password PASSWORD   # the team's Wi-Fi
+adb shell ip -4 addr show wlan0                           # note its address
 
 # report model, 3.4 GB
 ollama pull gemma3:4b
@@ -68,7 +117,7 @@ ollama pull gemma3:4b
 
 The LED matrix animation is set up once from [firmware/relay-matrix/README.md](firmware/relay-matrix/README.md).
 
-**Clean slate** (close every ARK window first; this deletes both identities and the incident):
+**Clean slate.** Close every ARK window first. This deletes both identities and the incident for good:
 
 ```sh
 rm -rf station-a station-b build/tmp-*
@@ -78,95 +127,151 @@ rm -rf station-a station-b build/tmp-*
 
 ```sh
 curl -s 127.0.0.1:11434/api/tags >/dev/null || (setsid nohup ollama serve >/dev/null 2>&1 &)
-tools/ark-report --warm
+tools/ark-report --warm                        # loads it into the GPU, about 10 s
 adb shell 'pgrep -f "^python3 hub.py" >/dev/null || (cd /home/arduino/ark && setsid nohup python3 hub.py > hub.log 2>&1 < /dev/null &)'
-adb shell 'ss -ltn | grep 4210'               # should print a LISTEN line
+adb shell 'ss -ltn | grep 4210'                # should print a LISTEN line
 ```
 
-**Stations, on one laptop** (each in its own terminal):
+The hub doesn't start at boot. Run the `adb shell` line again after the UNO Q restarts.
+
+**Laptop A**, manager, with the UNO Q and the panel on USB:
 
 ```sh
-ARK_COST_PER_RECORD=160 PANEL=/dev/ttyUSB0 ./station.sh station-a usb   # manager
-./station.sh station-b usb                                              # worker
-```
-
-**Or on two laptops.** Laptop A has the UNO Q and the panel on USB; laptop B is on the team's Wi-Fi:
-
-```sh
-# laptop A
 ARK_COST_PER_RECORD=160 PANEL=/dev/ttyUSB0 ./station.sh station-a usb
-adb shell nmcli dev wifi connect SSID password PASSWORD   # once: UNO Q joins the team Wi-Fi
-adb shell ip -4 addr show wlan0                           # its address
+tools/ark-watch station-a                      # in another terminal
+```
 
-# laptop B
+**Laptop B**, analyst, on the team's Wi-Fi, with this repo cloned:
+
+```sh
 hcc src/main.HC -o build/ark
-./station.sh station-b wifi 10.147.184.235                # the UNO Q's address
+./station.sh station-b wifi 10.147.184.235     # the UNO Q's address
 ```
 
-**To rehearse without losing the internet**, start station A with stand-ins for the cut and restore:
+Both stations on laptop A also works: `./station.sh station-b usb` in a second terminal.
+
+To rehearse on the real hardware without losing the internet, add `ARK_CUT_CMD=true ARK_RESTORE_CMD=true` to laptop A's command. Then run the same steps as on one laptop. The panel's red button cuts with one press, green restores, and the LEDs show which state laptop A is in.
+
+[docs/DEMO.md](docs/DEMO.md) has the same run with more detail and a troubleshooting table.
+
+## Simulating an attack
+
+`tools/ark-watch STATION_DIR` follows the systemd journal and hands each event to a running, unlocked station:
+
+| Source | What it picks up | Needs |
+|---|---|---|
+| shell | commands typed in a shell | `source tools/hooks/ark-shell.{bash,zsh,fish}` in that shell |
+| sudo | every sudo command, wrong sudo passwords | nothing |
+| login | SSH and su logins | nothing |
+| fail | failed SSH, su and sudo passwords | nothing |
+| account | useradd, usermod, groupadd, passwd, chpasswd | nothing |
+| request | web requests | `--access-log /var/log/nginx/access.log` |
 
 ```sh
-ARK_CUT_CMD=true ARK_RESTORE_CMD=true PANEL=/dev/ttyUSB0 ./station.sh station-a usb
+tools/ark-watch station-a --access-log /var/log/nginx/access.log
+tools/ark-watch station-a --host FS-01         # name the server in the log
+tools/ark-watch station-a --print              # print events instead of sending them, to check what it sees
+tools/drill.sh                                 # rehearsal intrusion, runs nothing
 ```
 
-**In the windows:** A starts an incident, B joins and shows a 6-digit code, A approves it on the Team page (F9). Record what was hit on Scope (F4).
-
-**Feed the Server log** on laptop A:
-
-```sh
-tools/ark-watch station-a                     # sudo, ssh, su, account changes, typed commands
-tools/ark-watch station-a --access-log /var/log/nginx/access.log   # web requests too
-source tools/hooks/ark-shell.zsh              # or .bash / .fish, in the "attacker" shell
-tools/drill.sh                                # rehearsal intrusion: logs attacker-style commands, runs none
-DRILL_GAP=5 tools/drill.sh                    # same, slower
-```
-
-**The story:** B reports `cat /etc/shadow` to the manager, A's panel buzzes, A presses red (internet cut), then green (restored), then Request report on the Report page (F7). The PDF opens by itself.
-
-**Report from the command line:**
-
-```sh
-tools/ark-report station-a                    # what the button runs (needs a fresh export from the station)
-tools/ark-report station-a --no-ai            # figures and timeline only
-ARK_REPORT_MODEL=qwen2.5:3b ARK_OPEN_CMD=okular ./station.sh station-a usb   # other model, other PDF viewer
-```
-
-**Remake the GIF and screenshots:**
-
-```sh
-hcc tests/render_demo.HC -o build/render_demo && SDL_VIDEODRIVER=offscreen ./build/render_demo
-python3 tools/make-demo-gif.py                # writes docs/demo.gif
-hcc tests/render_views.HC -o build/render_views && SDL_VIDEODRIVER=offscreen ./build/render_views
-```
-
-**Shut down:** close both windows (each wipes its keys from memory), Ctrl+C `ark-watch`, then:
-
-```sh
-adb shell 'pkill -f "^python3 hub.py"'
-curl -s 127.0.0.1:11434/api/generate -d '{"model":"gemma3:4b","keep_alive":0}' >/dev/null   # frees the GPU
-```
+`tools/drill.sh` uses `logger -t ark-shell`, the same path as the shell hook, so its rows look exactly like typed commands. The rules that flag a row are `g_rules` in `src/events.HC`.
 
 ## Report
 
-The Report page (F7) has a **Request report** button, for the manager and analysts alike. A few seconds later a PDF opens: what happened, a timeline, what was lost and what was protected, money at a cost per record you set, deadlines and next steps. Every figure and the timeline are computed from the signed log. A model on the same laptop writes only the summary and next steps, and each of its sentences has to cite the figures and timeline rows it rests on; a sentence that names anything not in what it cites is dropped. Nothing is sent anywhere.
+**Request report** on the Report page (F7) works for the manager and analysts alike. The station exports its verified log, and `tools/ark-report` builds the PDF in the background. It opens with `xdg-open`, or `ARK_OPEN_CMD` if set. Copies are kept in `station-a/report/` as PDF and markdown, mode 0600.
 
-Without Ollama the report is still written, from the figures and timeline. Saved to `station-a/report/report.pdf` and `report.md`.
+- Every figure and the timeline are computed from the log.
+- The model (gemma3:4b through Ollama, on 127.0.0.1 only) writes the summary and next steps. Each sentence ends with the key figures and timeline rows it cites. A sentence that names a number, address, account or system that isn't in what it cites is dropped, and the report says so.
+- The attacker's typed text reaches the model only with quoted strings hidden.
+- Without Ollama, the report is written from the figures and timeline and says why.
+
+```sh
+tools/ark-report station-a                     # what the button runs; needs a fresh export from the station
+tools/ark-report station-a --no-ai             # figures and timeline only
+tools/ark-report station-a --model qwen2.5:3b --cost-per-record 160
+tools/ark-report --warm                        # load the model before a demo
+```
+
+About 7 to 8 s per report on an RTX 3050 Laptop GPU once the model is loaded.
+
+## Settings
+
+| Variable | Default | Effect |
+|---|---|---|
+| `PANEL` | unset | Arduino panel port for `station.sh`, e.g. `/dev/ttyUSB0` |
+| `ARK_CUT_CMD` | `nmcli networking off` | what CUT runs |
+| `ARK_RESTORE_CMD` | `nmcli networking on` | what RESTORE runs |
+| `ARK_COST_PER_RECORD` | unset | dollars per lost or protected record in the report; no money figures without it |
+| `ARK_REPORT_MODEL` | `gemma3:4b` | Ollama model for the report |
+| `ARK_OPEN_CMD` | `xdg-open` | PDF viewer, e.g. `okular` |
+| `ARK_REPORT_CMD` | `tools/ark-report` | report tool (the tests use a stand-in) |
+| `OLLAMA_HOST` | `127.0.0.1:11434` | must point at this machine; anything else is refused |
+| `DRILL_GAP` | `3` | seconds between drill commands |
+
+`./station.sh DIR usb [ADB_SERIAL]` reaches the relay over USB through an adb port forward. `./station.sh DIR wifi HOST` reaches it at HOST. Both start a socat bridge and build `build/ark` if it's missing.
+
+## Keys
+
+| Key | Does |
+|---|---|
+| F1 | Guide |
+| F2 / F3 / F5 | write a note / chat / alert |
+| F4 | add an affected system |
+| F6 | Server log |
+| F7 | Report |
+| F9 | approve the waiting join request (manager) |
+| F12 twice | lock the station: wipes the keys from memory and quits |
+| Ctrl+F | search the page you're on |
+| PgUp / PgDn | scroll the Server log and the report |
+| Esc | clear search, close the form |
+
+## Tests and screenshots
+
+```sh
+./tests/run.sh                                 # everything; exit code 0 means all passed
+hcc tests/render_views.HC -o build/render_views && SDL_VIDEODRIVER=offscreen ./build/render_views   # every page to build/ui-*.ppm
+hcc tests/render_demo.HC -o build/render_demo && SDL_VIDEODRIVER=offscreen ./build/render_demo
+python3 tools/make-demo-gif.py                 # docs/demo.gif from the render_demo frames
+python3 tools/make-icons.py                    # redraws assets/icons from their SVG source
+```
+
+[docs/TESTING.md](docs/TESTING.md) lists what each test covers.
+
+## Status
+
+| Part | State |
+|---|---|
+| libsodium bindings (sign, secretbox, sealed box, hash) | done, tested |
+| Serial link and frame chunking | done, tested over fake serial ports and the real relay |
+| Incident log: signed entries, per-author hash chains, fork and gap detection | done, tested |
+| Passphrase-sealed identity and keys on disk | done, tested |
+| Relay hub on the Arduino UNO Q, stations over USB and Wi-Fi | done, tested over real Wi-Fi |
+| Station window: nine pages, control panel, resizable, text at screen resolution | done, tested (`test_ui`), rendered at 1366x768 to 2560x1440 |
+| Server log from `tools/ark-watch`, flagged by attack-step rules, Report to manager | done, tested (`test_ui`, `test_watch`); watcher run live on Arch |
+| Manager-only phase changes, analysts request them | done, tested (`test_ui`) |
+| Arduino panel: red CUT, green RESTORE, LEDs, buzzer | flashed; beeps and LEDs checked by hand. The real `nmcli` cut hasn't been run yet |
+| Breach-notification clocks | done, tested |
+| PDF report with cited model sentences | done, tested (`test_report`, `test_ui`) |
+| Start over: clear a station from setup, the unlock screen or the Team page | done, tested (`test_ui`) |
+
+Known gaps: nothing tests frame loss or reordering, the hub has no test of its own (it's covered by `test_link` over the real relay), and nothing checks that the model's sentences are true, only that what they name is in what they cite.
 
 ## Docs
 
-- [docs/DEMO.md](docs/DEMO.md): every command for setup, a clean demo, one or two laptops, and the story to show
-- [docs/BUILDING.md](docs/BUILDING.md): dependencies, building, flashing
+- [docs/DEMO.md](docs/DEMO.md): the demo runbook and troubleshooting
+- [docs/BUILDING.md](docs/BUILDING.md): dependencies, other distros, hcc pitfalls
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): how the pieces fit
-- [docs/DECISIONS.md](docs/DECISIONS.md): why it is built this way
+- [docs/DECISIONS.md](docs/DECISIONS.md): why it's built this way
 - [docs/TESTING.md](docs/TESTING.md): what the tests cover
 - [docs/DEVELOPMENT_LOG.md](docs/DEVELOPMENT_LOG.md): what happened, in order
-- [docs/TUTORIAL.md](docs/TUTORIAL.md): build it yourself, step by step
+- [docs/TUTORIAL.md](docs/TUTORIAL.md): the first three parts, step by step
 
 ## Credits
 
 - SDL2 bindings adapted from [YatoVoid/holyc-graphics-guide](https://github.com/YatoVoid/holyc-graphics-guide) (MIT).
-- [Inter](https://rsms.me/inter/) by Rasmus Andersson and [JetBrains Mono](https://www.jetbrains.com/lp/mono/), both under the SIL Open Font License (`assets/fonts`).
+- [Inter](https://rsms.me/inter/) by Rasmus Andersson, [Fira Sans](https://github.com/mozilla/Fira) by Carrois for Mozilla, and [JetBrains Mono](https://www.jetbrains.com/lp/mono/), all under the SIL Open Font License (`assets/fonts`).
 - [libsodium](https://libsodium.org) for all cryptography.
+- Network icons in `assets/icons` are drawn by `tools/make-icons.py` for this project.
 
 ## License
 

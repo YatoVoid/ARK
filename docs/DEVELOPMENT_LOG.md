@@ -101,7 +101,7 @@ Both were found by bisecting the include list with a stub `Main`. A build that p
 
 ## 2026-11-07 night, demo runbook and GIF
 
-`docs/DEMO.md` holds every command: setup, clean slate, relay, one or two laptops, feeding the server log, the five-step story, rehearsing with stand-in cut commands. `docs/demo.gif` is drawn from the code: `tests/render_demo.HC` runs a manager and a worker station through that story in one process and dumps each screen, and `tools/make-demo-gif.py` adds the hardware and which links each step uses. Rendering it showed the chat log printing an alert's internal `[ref]`; it's hidden now.
+`docs/DEMO.md` holds every command: setup, clean slate, relay, one or two laptops, feeding the server log, the five-step story, rehearsing with stand-in cut commands. `docs/demo.gif` is drawn from the code: `tests/render_demo.HC` runs a manager and an analyst station through that story in one process and dumps each screen, and `tools/make-demo-gif.py` adds the hardware and which links each step uses. Rendering it showed the chat log printing an alert's internal `[ref]`; it's hidden now.
 
 ## 2026-11-07 late night, the report
 
@@ -119,3 +119,10 @@ A Report page (F7) writes an after-incident report for the company: what happene
 - The citation check first rejected "December 7th" and the "01" in "FS-01". Ordinals are read as numbers now, and digits inside a name are checked as part of the name.
 - Setup had no way back: someone who pressed Start instead of Join had to delete the station directory by hand. Start over (setup), Clear station (unlock screen) and Clear this station (Team page) delete this station's data after two presses.
 
+## 2026-11-08, colour, roles and icons
+
+- Log rows were read line by line. They now carry a tag coloured by meaning (red ALERT and CUT, the phase colour for phase notes, the status colour for scope), and status and phase words inside the text are coloured the same way. The Guide has a Colors section. A grouping change that hid the author on follow-up rows was reverted: every row shows who wrote it.
+- Two windows side by side showed that any analyst could move the phase for everyone, and that an analyst who pressed CUT was stuck offline with a RESTORE button they couldn't use. Decision 17 has the fix. `test_ui` gained checks for both, including a forged phase note from an analyst.
+- The Network page diagram uses drawn icons (a laptop and a switch) instead of bordered boxes. They're SVG in `assets/icons`, converted to raw RGBA by `tools/make-icons.py`, because the station has no PNG decoder and SDL_image isn't linked.
+- The relay hub runs on a laptop as well as on the UNO Q, so two windows can be tried with no hardware. `test_link` passed through a local hub.
+- Headings switched to Fira Sans Condensed; body text stays Inter.

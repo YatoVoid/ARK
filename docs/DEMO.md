@@ -1,15 +1,15 @@
 # Running the demo
 
-![ARK demo: watcher, worker report, manager cut and restore, report](demo.gif)
+![ARK demo: watcher, analyst report, manager cut and restore, report](demo.gif)
 
-The GIF is drawn from the real code: `tests/render_demo.HC` runs both stations through the story below and `tools/make-demo-gif.py` lays out the screens with the hardware. The one difference from a live run is that the render hands messages between stations directly instead of through the relay.
+The GIF is drawn from the real code: `tests/render_demo.HC` runs both stations through the story below and `tools/make-demo-gif.py` lays out the screens with the hardware. Two differences from a live run: the render hands messages between stations directly instead of through the relay, and it skips the phase request in step 5.
 
 ## Who is who
 
 | Machine | Role | What runs on it |
 |---|---|---|
 | Laptop A | manager (Dana) | `station-a`, `tools/ark-watch`, the Arduino UNO panel on USB |
-| Laptop B | worker / analyst (Marcus) | `station-b` |
+| Laptop B | analyst (Marcus) | `station-b` |
 | Arduino UNO Q | relay | `relay/hub.py` (forwards sealed messages), the ARK animation on its LED matrix |
 | Arduino UNO | panel, plugged into laptop A | `firmware/panel`: red CUT, green RESTORE, two LEDs, buzzer |
 | FS-01 | the watched server | in the demo, laptop A plays it: the shell hook and `tools/ark-watch` |
@@ -73,13 +73,25 @@ adb shell 'ss -ltn | grep 4210'               # should print a LISTEN line
 
 The hub doesn't start at boot. Run this again after the UNO Q restarts or loses power.
 
-## Two stations on one laptop
+## No hardware: hub on the laptop
+
+The hub is plain Python and runs anywhere. Each command in its own terminal:
+
+```sh
+python3 relay/hub.py
+ARK_CUT_CMD=true ARK_RESTORE_CMD=true ./station.sh station-a wifi 127.0.0.1   # manager
+./station.sh station-b wifi 127.0.0.1                                          # analyst
+```
+
+Everything below works the same, minus the panel's buzzer and LEDs.
+
+## Two stations on one laptop, with the relay
 
 Each command in its own terminal:
 
 ```sh
 ARK_COST_PER_RECORD=160 PANEL=/dev/ttyUSB0 ./station.sh station-a usb      # terminal 1: manager
-./station.sh station-b usb                         # terminal 2: worker
+./station.sh station-b usb                         # terminal 2: analyst
 ```
 
 ## Two laptops
@@ -106,13 +118,13 @@ hcc src/main.HC -o build/ark
 ./station.sh station-b wifi 10.147.184.235
 ```
 
-Laptop B has no CUT button: its link to the relay is Wi-Fi, so cutting its network would cut it off the team too. The kill switch is the manager's; B sends an alert instead.
+Laptop B has no CUT button: its link to the relay is Wi-Fi, so cutting its network would cut it off the team too. The kill switch is the manager's; B has **Alert the manager** instead.
 
 ## First start: incident and join
 
 1. **Station A:** name, passphrase twice, **Start an incident**, title (e.g. `Ransomware on FS-01`).
 2. **Station B:** name, passphrase twice, **Join an incident**. It shows a 6-digit code.
-3. Station A's panel beeps once. On A's Team page (or F9), check the code matches what B shows, and approve.
+3. Station A's panel beeps once. On A's Team page, check the code matches what B shows, and press **Approve** (or F9).
 
 B now has the team key and the whole log.
 
@@ -144,9 +156,10 @@ sudo commands, SSH and su logins and failed passwords are picked up from the jou
 1. **Run the drill.** Rows appear on both stations' Server log. SUSPICIOUS ones are red; the sidebar counts the ones nobody has reported.
 2. **On B,** filter to Suspicious and click `cat /etc/shadow`. The panel underneath shows who ran it, where, and why it was flagged.
 3. **On B,** press **Report to manager**. A's panel beeps three times and the alert sits at the top of A's control panel. B shows the row as REPORTED.
-4. **On A,** press **Acknowledge**, then the red button. The red LED lights, the top bar reads **Internet: CUT**, and a signed entry tells everyone. Chat between A and B keeps working.
-5. **On A,** press green once "backups are done". The green LED lights and the internet comes back. Only the manager's station has the kill switch, so only it restores.
-6. **On A (or B),** open **Report** (F7) and press **Request report**. In about 8 seconds the PDF opens: summary, timeline, records lost and protected, the money estimate, deadlines and next steps. The summary and next steps were written by gemma3:4b on the laptop, and each sentence ends with the key figures and timeline rows it cites; everything else comes straight from the log. Saved as `station-a/report/report.pdf`.
+4. **On A,** press **Acknowledge**, then the red button. The red LED lights, A's status reads **Internet CUT**, and a signed entry tells everyone. B's control panel shows A's laptop as offline. Chat between A and B keeps working.
+5. **On B,** click ERADICATE in the top bar. Only the manager moves the phase, so this sends A a request; A's panel beeps and the alert card has **Move to ERADICATE**.
+6. **On A,** press green once "backups are done". The green LED lights and the internet comes back. Only the manager's station has the kill switch, so only it restores.
+7. **On A (or B),** open **Report** (F7) and press **Request report**. In about 8 seconds the PDF opens: summary, timeline, records lost and protected, the money estimate, deadlines and next steps. The summary and next steps were written by gemma3:4b on the laptop, and each sentence ends with the key figures and timeline rows it cites; everything else comes straight from the log. Saved as `station-a/report/report.pdf`.
 
 Before the steps, record what was hit on the Scope page (F4), for example `FS-01`, PII, TX, 4120, ENCRYPTED and `NAS-02`, OTHER, 18000, CLEAN. The report's lost and protected figures come from there.
 

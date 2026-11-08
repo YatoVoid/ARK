@@ -1,15 +1,15 @@
 // Drawing for the station window: filled rectangles with anti-aliased round
 // corners, and text from glyphs that SDL2_ttf renders once per window size.
 //
-// Layout code works in design units, where the window is at least 1180x900.
+// Layout code works in design units, where the window is at least 1360x900.
 // The pixel buffer is the window's real size in physical pixels, and every
 // primitive converts units to pixels by the scale g_s (thousandths). So text
 // is rendered at the size it is shown, never stretched, and a wider window
 // gives the layout more width instead of black bars. The frame is redrawn
 // from scratch when something changes, then copied to the window 1:1.
 //
-// Fonts are Inter and JetBrains Mono, both SIL Open Font License, bundled in
-// assets/fonts with their licenses.
+// Fonts are Inter, Fira Sans Condensed (headings) and JetBrains Mono, all
+// SIL Open Font License, bundled in assets/fonts with their licenses.
 
 #link <SDL2_ttf>
 
@@ -286,7 +286,6 @@ U0 CanvasClose(Canvas *c)
 
 // ---- shapes ---------------------------------------------------------------
 
-// Pixel rectangle, clipped.
 U0 FillPx(Canvas *c, I64 x0, I64 y0, I64 x1, I64 y1, U32 color)
 {
   x0 = MaxI64(x0, c->clip_x0);

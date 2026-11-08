@@ -1,7 +1,8 @@
-// The radio link: a serial port to the ESP32 relay, hex lines on the wire,
-// and splitting messages into ESP-NOW sized frames and joining them again.
+// The link to the relay: a serial port (a socat pty in practice), hex lines
+// on the wire, and splitting messages into frames and joining them again.
 //
-// Frame layout (at most 250 bytes, the ESP-NOW limit):
+// Frame layout (at most 250 bytes, which also caps a line so the hub can
+// drop anything longer):
 //   0      'A'
 //   1..4   message id, random per message
 //   5      part index

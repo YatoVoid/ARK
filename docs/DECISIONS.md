@@ -89,7 +89,7 @@ The TempleOS screen tested well for looks and badly for use. People couldn't tel
 - **Dark on purpose.** Incident rooms run at night and on projectors. Body text is #E6EBF5 on #0B1020, above 15:1. Secondary text is #A3AEC6, above 8:1.
 - **The deadline comes first.** The Overview opens on the nearest notice deadline in large type, then affected systems and a short list of things waiting on you.
 - **Forms instead of prompts.** Adding a system is one form with every field and its choices visible, each explained in a line.
-- **The phase belongs to the incident.** Clicking a phase posts a signed note, so every station shows the same phase and the change is in the record.
+- **The phase belongs to the incident.** Clicking a phase posts a signed note, so every station shows the same phase and the change is in the record. (Only the manager's notes count now; see decision 17.)
 - **Fonts are bundled** (SIL OFL, in `assets/fonts`), so the window looks the same on any laptop. SDL2_ttf renders each glyph once at startup; drawing is then plain pixel copies.
 
 What this gives up: decision 11's "no rendering library to trust". SDL2_ttf and FreeType are back. They only ever see ARK's own strings and the bundled fonts, never network input as font data.
@@ -99,7 +99,7 @@ What this gives up: decision 11's "no rendering library to trust". SDL2_ttf and 
 The scenario the panel serves: an analyst reading logs suspects someone is in the system and tampering with files. They send the manager an alert from ARK, and the manager's panel buzzes. The manager presses red, which takes the machine off the internet so any link the attacker had through it is gone. The team keeps working in ARK over the relay, encrypted end to end. When systems are backed up and the attacker is out, the manager presses green to restore.
 
 - **Cut on the machine with the panel only.** Cutting every station's internet from one button would also cut stations that reach the relay over Wi-Fi. Each cut is logged, so every station sees who cut what and when.
-- **Restore is manager-only; cut isn't.** Isolating early is the safe mistake. Reconnecting too early is the dangerous one.
+- **Restore is manager-only; cut isn't.** Isolating early is the safe mistake. Reconnecting too early is the dangerous one. (Replaced by decision 17: now both are the manager's.)
 - **On screen, CUT takes two presses within 3 seconds**, so a stray click can't drop the internet. The hardware button is one press, because it's an emergency control in the manager's hand.
 - **Commands are environment variables** (`ARK_CUT_CMD`, `ARK_RESTORE_CMD`) so a deployment can block a firewall zone or drop a VPN instead of turning NetworkManager off.
 - **Wiping keys moved to "Lock station"** (on screen, or F12 twice). Join approval is on the Team page and F9.
@@ -124,3 +124,12 @@ After an incident the company wants one document: what happened, what was lost, 
 - **Code writes the timeline; the model writes the summary and next steps, with citations.** The first version let the model write the attack story too, and a number check caught invented figures but not invented claims: it blamed a staff login for the attack. Now each model sentence must cite the figures and timeline rows it rests on, and any name, address or number in it has to be in what it cites. Attacker commands reach the model with their quoted text hidden.
 - **Money is an input.** ARK records no costs. The estimate is records times a cost per record the team sets (`ARK_COST_PER_RECORD`), stated next to every amount. Without it the report has no money figures.
 - **The report is plain text on disk** (mode 0600), unlike the log, which stays sealed. It is meant to be handed over. The decrypted export it is built from is deleted as soon as the tool has read it.
+
+## 17. The manager owns the phase and the kill switch
+
+Running both stations side by side showed two things that felt like bugs. Any analyst could click a phase and move the incident on every screen. And an analyst who pressed red had their own laptop cut, with a RESTORE button they weren't allowed to press, so it stayed stuck.
+
+- **Only the manager's phase notes count.** Every station checks this when it reads the log, so a modified station can't move the others. An analyst's click on a phase posts a signed alert, "Asks to move the response to ERADICATE.", and the manager's alert card gets a Move to ERADICATE button. A second click within a minute doesn't ask again.
+- **CUT is on the manager's station only.** An analyst's link to the relay is usually Wi-Fi, so their cut would take them off the team, which is the opposite of what ARK is for. Their panel has Alert the manager instead, and shows whether the manager's laptop is online.
+- **RESTORE runs on whichever station is cut.** A cut is a command on that machine, so only that machine can undo it. Stations cut before this change can still restore themselves.
+- **The window title names the role** (`ARK  Manager: Dana Kessler`), because with two windows open on one desktop it was easy to type into the wrong one.

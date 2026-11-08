@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds and runs every test. The link test uses two fake serial ports
-# made by socat, so no ESP32 is needed.
+# made by socat, so no relay is needed.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 mkdir -p build

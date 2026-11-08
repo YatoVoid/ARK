@@ -13,7 +13,7 @@
 //                      "A" (alert: three beeps)
 //
 // The panel holds no keys and makes no decisions. The station decides
-// whether a press is allowed (only the manager can restore) and logs it.
+// whether a press is allowed (only the manager's station cuts) and logs it.
 
 const int PIN_RESTORE = 2;
 const int PIN_CUT = 3;

@@ -1,5 +1,5 @@
 // The station's window: setup screens, then a sidebar of pages, a top bar
-// with the incident phase and link state, and a control panel on the right
+// with search and the incident phase, and a control panel on the right
 // that mirrors the hardware panel. main.HC only parses arguments and runs
 // the loop; tests/render_views.HC draws every page from a sample log.
 
@@ -62,7 +62,6 @@
 #define H_WHERE      12
 #define H_UNKNOWN    13
 #define H_APPROVE    14
-#define H_PANIC      15
 #define H_START      16
 #define H_JOIN       17
 #define H_CONTINUE   18
@@ -472,10 +471,10 @@ I64 RequestedPhase(U8 *text)
   return 0;
 }
 
-// The phase of the manager's newest note. Clicking a phase in the top bar
-// posts such a note, so every station agrees on the phase. Notes from other
-// members carry a phase too, but only the manager can move the incident, and
-// that is checked here on every station, not just hidden in the UI.
+// The phase of the manager's newest note. The manager's phase click posts
+// such a note, so every station agrees on the phase. Notes from analysts
+// carry a phase too, but only the manager's count, and that is checked here
+// on every station, not just hidden in the UI.
 I64 IncidentPhase(App *a)
 {
   Log *log = a->st->log;
@@ -1106,20 +1105,6 @@ U0 DrawSide(App *a)
   Text(c, F_MONO, 20, g_ch - 36, keyline, C_FAINT);
 }
 
-// A status chip in the top bar: coloured dot and a short label.
-U0 Chip(App *a, I64 x, I64 w, U8 *label, U32 color, I64 view)
-{
-  Canvas *c = a->cv;
-  I64 y = 14, h = 36;
-  U32 bg = Mix(color, C_BG, 30);
-  if (Hover(a, x, y, w, h))
-    bg = Mix(color, C_BG, 54);
-  Box(c, x, y, w, h, 6, bg, Mix(color, C_BG, 110));
-  Dot(c, x + 16, y + 18, 8, color);
-  TextMid(c, F_MED, x + 28, y + 18, label, LightOf(color), w - 36);
-  AddHit(a, x, y, w, h, H_NAV, view);
-}
-
 U0 DrawTop(App *a)
 {
   Canvas *c = a->cv;
@@ -1156,7 +1141,6 @@ U0 DrawTop(App *a)
   }
   if (!IsAdmin(a->st))
     TextMid(a->cv, F_SMALL, x + 12, 32, "Set by the manager. Click a phase to ask for it.", C_FAINT);
-
 }
 
 // One status light in the control panel.
@@ -1821,7 +1805,6 @@ U0 DrawServerPage(App *a)
   I64 detail_h = 150;
   I64 h = g_ch - 20 - detail_h - 16 - y;
   Card(a, CX0, y, (g_cw - SIDE_W - PANEL_W - 2 * PAD), h);
-  // Column header.
   I64 cw = CX0 + 16, cu = CX0 + 92, ct = CX0 + 262, cd = CX0 + 360, dw = (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 360 - 128;
   Text(c, F_LABEL, cw, y + 14, "TIME", C_FAINT);
   Text(c, F_LABEL, cu, y + 14, "WHO, WHERE", C_FAINT);
@@ -2307,17 +2290,14 @@ U0 DrawNetworkPage(App *a)
   DrawImage(c, &a->icon_laptop, lx - isz / 2, iy, isz);
   DrawImage(c, &a->icon_relay, mx - isz / 2, iy, isz);
   DrawImage(c, &a->icon_laptop, ox - isz / 2, iy, isz);
-  // This station.
   Text(c, F_H2, lx - TextWidth(c, F_H2, "This station") / 2, ty, "This station", C_TEXT);
   Text(c, F_SMALL, lx - MinI64(TextWidth(c, F_SMALL, a->st->name), colw) / 2, ty + 26, a->st->name, C_MUTED, colw);
   U8 count[48];
   snprintf(count, 48, "%s, %ld entries", a->port, a->st->log->count);
   Text(c, F_SMALL, lx - MinI64(TextWidth(c, F_SMALL, count), colw) / 2, ty + 46, count, C_FAINT, colw);
-  // Relay.
   Text(c, F_H2, mx - TextWidth(c, F_H2, "Untrusted relay") / 2, ty, "Untrusted relay", C_TEXT);
   Text(c, F_SMALL, mx - TextWidth(c, F_SMALL, "Arduino UNO Q, own Wi-Fi") / 2, ty + 26, "Arduino UNO Q, own Wi-Fi", C_MUTED);
   Badge(a, mx - (TextWidth(c, F_LABEL, "SEES ONLY CIPHERTEXT") + 14) / 2, ty + 56, "SEES ONLY CIPHERTEXT", C_PURPLE);
-  // Other stations.
   Text(c, F_H2, ox - TextWidth(c, F_H2, "Other stations") / 2, ty, "Other stations", C_TEXT);
   I64 py = ty + 34, shown = 0;
   I64 now = time(NULL);
@@ -2813,7 +2793,7 @@ U8 *ReportTool()
 }
 
 // Loads the model in the background the first time the Report page opens,
-// so pressing Write report doesn't wait for it.
+// so pressing Request report doesn't wait for it.
 U0 WarmReport(App *a)
 {
   if (a->report_text == NULL && a->report_state == RS_NONE && LoadReport(a)) {

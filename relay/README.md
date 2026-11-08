@@ -38,4 +38,16 @@ While developing, the UNO Q joins the same Wi-Fi as the laptop:
 adb -s SERIAL shell nmcli dev wifi connect SSID password PASSWORD
 ```
 
-For the demo it runs its own access point, so nothing touches any other network. Not set up yet.
+For the demo it joins a network the team controls (a phone hotspot works), never the company's. Running its own access point would remove even that, but it isn't set up.
+
+## Without the UNO Q
+
+The hub is plain Python 3 with no dependencies, so it also runs on a laptop:
+
+```sh
+python3 relay/hub.py
+./station.sh station-a wifi 127.0.0.1
+./station.sh station-b wifi 127.0.0.1
+```
+
+It listens on port 4210 on every interface. Stations on other laptops can use the laptop's address instead of 127.0.0.1.

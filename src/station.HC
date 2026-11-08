@@ -178,7 +178,7 @@ I64 Receive(Station *s, U8 *msg, I64 len)
   return result;
 }
 
-// Receives a message from the radio, and keeps it on disk if it was new.
+// Receives a message from the relay, and keeps it on disk if it was new.
 I64 StationReceive(Station *s, U8 *msg, I64 len)
 {
   I64 r = Receive(s, msg, len);
@@ -189,7 +189,7 @@ I64 StationReceive(Station *s, U8 *msg, I64 len)
   return r;
 }
 
-// Seals an entry for the radio and the disk. out must hold MSG_MAX.
+// Seals an entry for the relay and the disk. out must hold MSG_MAX.
 I64 MakeMessage(Station *s, Entry *e, U8 *out)
 {
   U8 rec[REC_MAX];

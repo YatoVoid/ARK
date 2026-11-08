@@ -1,4 +1,4 @@
-// Log and station behaviour without a radio: messages are handed from one
+// Log and station behaviour without a relay: messages are handed from one
 // station to another directly. Uses build/tmp-log/ as scratch space.
 
 #include "../src/util.HC"
