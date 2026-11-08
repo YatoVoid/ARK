@@ -78,6 +78,9 @@
 #define H_BACK       29   // back to the name step, nothing written yet
 #define H_ALERT_MGR  30   // a member's panel: start an alert to the manager
 #define H_ROLE       31   // pick the role for the next approval
+#define H_MEMBER     32   // manager: open a member's role and removal controls
+#define H_SET_ROLE   33   // manager: change the open member's role
+#define H_REMOVE     34   // manager: remove the open member (press twice)
 
 // Glyphs from assets/icons/g-*.img, tinted when drawn.
 #define G_OVERVIEW   0
@@ -272,6 +275,9 @@ class App
   I64 feed_posted;        // events posted in it
   I64 feed_dropped;
   I64 clear_armed;        // time() of the first Clear press, 0 if not armed
+  U8 sel_pk[PK_BYTES];    // the member being edited on the Team page
+  Bool sel_on;
+  I64 remove_armed;       // time() of the first Remove press
   I64 phase_asked;        // phase a member last asked the manager for
   I64 phase_asked_at;     // and when, so a double click doesn't ask twice
   U8 title[160];          // window title last set
@@ -587,7 +593,13 @@ U0 CollectMembers(App *a)
     if (e->kind == KIND_GENESIS && log->has_admin && Same(e->author, log->admin, PK_BYTES)) {
       MemCpy(m->pk, e->author, PK_BYTES);
       m->admin = TRUE;
-    } else if (e->kind == KIND_MEMBER_ADD && e->body_len > PK_BYTES) {
+    } else if (e->kind == KIND_MEMBER_ADD && e->body_len > PK_BYTES && IsMember(log, e->body)) {
+      Bool dup = FALSE;
+      for (I64 j = 0; j < a->member_count; j++)
+        if (Same(a->members[j].pk, e->body, PK_BYTES))
+          dup = TRUE;
+      if (dup)
+        continue;
       MemCpy(m->pk, e->body, PK_BYTES);
       m->admin = FALSE;
     } else {
@@ -738,6 +750,13 @@ U0 EntryText(Log *log, Entry *e, U8 *out)
       snprintf(out, BODY_MAX + 128, "Admitted %s to the team as %s", name, role);
     else
       snprintf(out, BODY_MAX + 128, "Admitted %s to the team", name);
+  } else if ((e->kind == KIND_ROLE || e->kind == KIND_REMOVE) && e->body_len >= PK_BYTES) {
+    U8 name[NAME_MAX];
+    NameOf(log, e->body, name);
+    if (e->kind == KIND_ROLE)
+      snprintf(out, BODY_MAX + 128, "Changed %s's role to %s", name, e->body + PK_BYTES);
+    else
+      snprintf(out, BODY_MAX + 128, "Removed %s from the team. Everyone else has a new team key.", name);
   } else if (e->kind == KIND_SCOPE) {
     U8 body[BODY_MAX + 1];
     StrCpy(body, e->body);
@@ -813,7 +832,8 @@ Bool PassesFilter(App *a, Entry *e, U8 *text)
     return FALSE;
   if (f == FILTER_SCOPE && e->kind != KIND_SCOPE)
     return FALSE;
-  if (f == FILTER_TEAM && e->kind != KIND_MEMBER_ADD && e->kind != KIND_GENESIS)
+  if (f == FILTER_TEAM && e->kind != KIND_MEMBER_ADD && e->kind != KIND_GENESIS && e->kind != KIND_ROLE &&
+      e->kind != KIND_REMOVE)
     return FALSE;
   Field *q = &a->fields[FLD_SEARCH];
   if (q->len > 0) {
@@ -1461,10 +1481,23 @@ U0 DrawFlash(App *a)
 
 // ---- composer -------------------------------------------------------------
 
+// Admitted once, then removed by the manager.
+Bool Removed(App *a)
+{
+  Log *log = a->st->log;
+  return log->has_admin && !IsAdmin(a->st) && a->st->epoch >= 0 && !IsMember(log, a->st->pk) &&
+         RemovedOnce(log, a->st->pk);
+}
+
 U0 DrawComposer(App *a)
 {
   Canvas *c = a->cv;
   I64 y = (g_ch - 20 - COMPOSE_H), x = CX0;
+  if (Removed(a)) {
+    Box(c, x, y, (g_cw - SIDE_W - PANEL_W - 2 * PAD), COMPOSE_H, 8, Mix(C_RED, C_SURFACE, 30), C_RED);
+    TextMid(c, F_SEMI, x + 20, y + COMPOSE_H / 2, "The manager removed you from this team. You can read what you already had, but nothing new reaches you.", C_RED_FG, (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 40);
+    return;
+  }
   Card(a, x, y, (g_cw - SIDE_W - PANEL_W - 2 * PAD), COMPOSE_H);
   I64 bx = x + 8;
   for (I64 k = 0; k < 3; k++) {
@@ -1630,7 +1663,7 @@ U0 Avatar(App *a, U8 *pk, I64 cx, I64 cy)
 {
   U8 name[NAME_MAX], role[NAME_MAX], ini[4];
   NameOf(a->st->log, pk, name);
-  RoleOf(a->st->log, pk, role);
+  RoleNow(a->st->log, pk, role);
   Initials(name, ini);
   Dot(a->cv, cx, cy, 30, RoleColor(role));
   TextMid(a->cv, F_LABEL, cx - TextWidth(a->cv, F_LABEL, ini) / 2, cy, ini, C_BG);
@@ -1712,7 +1745,7 @@ I64 ConvoItem(App *a, Entry *e, U8 *text, Bool cont, I64 x, I64 y, I64 w, Bool d
   if (!cont) {
     U8 name[NAME_MAX], role[NAME_MAX];
     NameOf(a->st->log, e->author, name);
-    RoleOf(a->st->log, e->author, role);
+    RoleNow(a->st->log, e->author, role);
     if (mine)
       Avatar(a, e->author, x + w - 30, y + 26);
     else
@@ -2520,7 +2553,15 @@ U0 DrawTeamPage(App *a)
     y += 216;
   }
   CollectMembers(a);
+  Bool editing = FALSE;
+  for (I64 i = 0; i < a->member_count; i++)
+    if (a->sel_on && Same(a->members[i].pk, a->sel_pk, PK_BYTES))
+      editing = TRUE;
+  if (!editing || !IsAdmin(a->st))
+    a->sel_on = FALSE;
   I64 h = 43 + MaxI64(1, a->member_count) * 48 + 8;
+  if (a->sel_on)
+    h += 60;
   Card(a, CX0, y, (g_cw - SIDE_W - PANEL_W - 2 * PAD), h);
   I64 online = 0;
   for (I64 i = 0; i < a->member_count; i++)
@@ -2544,7 +2585,7 @@ U0 DrawTeamPage(App *a)
     if (Same(m->pk, a->st->pk, PK_BYTES))
       TextMid(c, F_SMALL, nx + 8, cy, "you", C_FAINT);
     U8 role[NAME_MAX];
-    RoleOf(a->st->log, m->pk, role);
+    RoleNow(a->st->log, m->pk, role);
     if (m->admin)
       Badge(a, CX0 + 260, cy, "MANAGER", C_CYAN);
     else if (role[0])
@@ -2564,8 +2605,50 @@ U0 DrawTeamPage(App *a)
       TextMid(c, F_SMALL, CX0 + (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 16 - TextWidth(c, F_SMALL, "online"), cy, "online", C_GREEN_FG);
     else
       TextMid(c, F_SMALL, CX0 + (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 16 - TextWidth(c, F_SMALL, "not heard"), cy, "not heard", C_FAINT);
+    I64 cw0 = g_cw - SIDE_W - PANEL_W - 2 * PAD;
+    Bool open = a->sel_on && Same(m->pk, a->sel_pk, PK_BYTES);
+    if (IsAdmin(a->st) && !m->admin) {
+      U8 *hint = "Manage";
+      if (open)
+        hint = "Close";
+      U32 hc = C_FAINT;
+      if (open || Hover(a, CX0, ry, cw0, 48))
+        hc = C_CYAN_FG;
+      TextMid(c, F_SMALL, CX0 + cw0 - 110 - TextWidth(c, F_SMALL, hint), cy, hint, hc);
+      AddHit(a, CX0, ry, cw0, 48, H_MEMBER, i);
+    }
+    if (open) {
+      I64 ey = ry + 48;
+      Fill(c, CX0 + 1, ey, cw0 - 2, 60, Mix(C_RAISED, C_SURFACE, 160));
+      U8 now[NAME_MAX];
+      RoleNow(a->st->log, m->pk, now);
+      TextMid(c, F_SEMI, CX0 + 24, ey + 30, "Role", C_TEXT);
+      I64 rx = CX0 + 70;
+      for (I64 rr = 0; rr < ROLES; rr++) {
+        I64 rw = TextWidth(c, F_SMALL, g_roles[rr]) + 30;
+        Bool on = StrCmp(now, g_roles[rr]) == 0;
+        U32 bg = C_BG, border = C_LINE2, fg = C_MUTED;
+        if (on) {
+          bg = Mix(g_role_color[rr], C_SURFACE, 40);
+          border = g_role_color[rr];
+          fg = C_TEXT;
+        } else if (Hover(a, rx, ey + 16, rw, 28)) {
+          fg = C_TEXT;
+        }
+        Box(c, rx, ey + 16, rw, 28, 6, bg, border);
+        Dot(c, rx + 11, ey + 30, 8, g_role_color[rr]);
+        TextMid(c, F_SMALL, rx + 20, ey + 30, g_roles[rr], fg);
+        AddHit(a, rx, ey + 16, rw, 28, H_SET_ROLE, rr);
+        rx += rw + 6;
+      }
+      U8 *rl = "Remove from team";
+      if (a->remove_armed != 0 && time(NULL) - a->remove_armed <= 3)
+        rl = "Press again";
+      Button(a, CX0 + cw0 - 16 - 160, ey + 12, 160, 36, rl, BTN_RED, H_REMOVE);
+      ry += 60;
+    }
     if (i < a->member_count - 1)
-      HLine(c, CX0 + 1, ry + 47, (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 2, C_ROWLINE);
+      HLine(c, CX0 + 1, ry + 47, cw0 - 2, C_ROWLINE);
     ry += 48;
   }
 
@@ -3025,7 +3108,14 @@ U0 PutLine(I32 fd, U8 *line)
   line[n] = 0;
 }
 
-U8 *g_export_kind[9] = {"", "genesis", "note", "chat", "scope", "member", "alert", "network", "event"};
+U8 *g_export_kind[11] = {"", "genesis", "note", "chat", "scope", "member", "alert", "network", "event", "role", "remove"};
+
+U8 *ExportKind(I64 kind)
+{
+  if (kind < 0 || kind > 10)
+    return "";
+  return g_export_kind[kind];
+}
 
 Bool ExportReport(App *a)
 {
@@ -3121,7 +3211,7 @@ Bool ExportReport(App *a)
         ref[8] = 0;
       }
       EntryText(log, e, text);
-      snprintf(line, 4096, "entry\t%ld\t%s\t%s\t%s\t%s\t%s", e->time, g_export_kind[e->kind],
+      snprintf(line, 4096, "entry\t%ld\t%s\t%s\t%s\t%s\t%s", e->time, ExportKind(e->kind),
                g_phase_names[MinI64(MaxI64(e->phase, 0), 4)], f2, ref, Tsv(f1, text, BODY_MAX));
     }
     PutLine(fd, line);
@@ -3412,8 +3502,10 @@ U0 WindowTitle(App *a)
     snprintf(title, 160, "ARK  Manager: %s", a->st->name);
   else if (Ready(a)) {
     U8 role[NAME_MAX];
-    RoleOf(a->st->log, a->st->pk, role);
-    if (role[0])
+    RoleNow(a->st->log, a->st->pk, role);
+    if (Removed(a))
+      snprintf(title, 160, "ARK  Removed: %s", a->st->name);
+    else if (role[0])
       snprintf(title, 160, "ARK  %s: %s", role, a->st->name);
     else
       snprintf(title, 160, "ARK  Analyst: %s", a->st->name);
@@ -3598,6 +3690,46 @@ U0 CutPressed(App *a)
     a->cut_armed = time(NULL);
 }
 
+U0 SetRole(App *a, I64 r)
+{
+  if (!a->sel_on || !IsAdmin(a->st) || r < 0 || r >= ROLES)
+    return;
+  U8 now[NAME_MAX], name[NAME_MAX], line[128];
+  RoleNow(a->st->log, a->sel_pk, now);
+  if (StrCmp(now, g_roles[r]) == 0)
+    return;
+  U8 body[PK_BYTES + NAME_MAX];
+  MemCpy(body, a->sel_pk, PK_BYTES);
+  I64 rl = StrLen(g_roles[r]);
+  MemCpy(body + PK_BYTES, g_roles[r], rl);
+  if (PostAndSend(a, KIND_ROLE, PHASE_NONE, body, PK_BYTES + rl)) {
+    NameOf(a->st->log, a->sel_pk, name);
+    snprintf(line, 128, "%s is now %s.", name, g_roles[r]);
+    Say(a, line, C_GREEN_FG);
+  }
+}
+
+// Press twice within 3 seconds, like Clear.
+U0 RemoveSelected(App *a)
+{
+  if (!a->sel_on || !IsAdmin(a->st))
+    return;
+  if (a->remove_armed == 0 || time(NULL) - a->remove_armed > 3) {
+    a->remove_armed = time(NULL);
+    return;
+  }
+  a->remove_armed = 0;
+  U8 name[NAME_MAX], line[160];
+  NameOf(a->st->log, a->sel_pk, name);
+  if (RemoveMember(a->st, &a->link, a->sel_pk)) {
+    snprintf(line, 160, "%s removed. Everyone else now has a new team key; %s can't read anything new.", name, name);
+    Say(a, line, C_GREEN_FG);
+    a->sel_on = FALSE;
+  } else {
+    Say(a, "Couldn't remove them: no more team keys left for this incident.", C_RED_FG);
+  }
+}
+
 U0 Approve(App *a)
 {
   if (!a->team.join_pending || !IsAdmin(a->st))
@@ -3739,7 +3871,7 @@ U0 SetPhase(App *a, I64 p)
 U0 SendCompose(App *a)
 {
   Field *f = &a->fields[FLD_COMPOSE];
-  if (f->len == 0)
+  if (f->len == 0 || Removed(a))
     return;
   if (PostAndSend(a, a->kind, IncidentPhase(a), f->text, f->len)) {
     ClearField(a, FLD_COMPOSE);
@@ -3909,6 +4041,21 @@ U0 Act(App *a, I64 id, I64 arg)
     a->focus = FLD_COMPOSE;
   } else if (id == H_ROLE) {
     a->approve_role = arg;
+  } else if (id == H_MEMBER) {
+    CollectMembers(a);
+    if (arg < a->member_count) {
+      if (a->sel_on && Same(a->sel_pk, a->members[arg].pk, PK_BYTES)) {
+        a->sel_on = FALSE;
+      } else {
+        MemCpy(a->sel_pk, a->members[arg].pk, PK_BYTES);
+        a->sel_on = TRUE;
+      }
+      a->remove_armed = 0;
+    }
+  } else if (id == H_SET_ROLE) {
+    SetRole(a, arg);
+  } else if (id == H_REMOVE) {
+    RemoveSelected(a);
   } else if (id == H_FILTER) {
     a->filter = arg;
     a->scroll = 0;

@@ -147,6 +147,22 @@ U0 RoleOf(Log *log, U8 *pk, U8 *out)
   }
 }
 
+// The newest role the manager gave pk: from its MEMBER_ADD, or a later
+// ROLE entry.
+U0 RoleNow(Log *log, U8 *pk, U8 *out)
+{
+  RoleOf(log, pk, out);
+  U64 best = 0;
+  for (I64 i = 0; i < log->count; i++) {
+    Entry *e = &log->entries[i];
+    if (e->kind == KIND_ROLE && e->status == ST_OK && e->body_len > PK_BYTES && Same(e->body, pk, PK_BYTES) &&
+        log->has_admin && Same(e->author, log->admin, PK_BYTES) && e->lamport >= best) {
+      best = e->lamport;
+      CopyText(out, e->body + PK_BYTES, NAME_MAX);
+    }
+  }
+}
+
 // Does peer p hold author's entry number seq, going by its last heads?
 Bool PeerHas(Peer *p, U8 *author, I64 seq)
 {
@@ -173,6 +189,18 @@ U0 NotePeer(Team *t, U8 *pk, U8 *name, U8 *list, I64 count)
     count = MAX_AUTHORS;
   MemCpy(t->peers[i].heads, list, count * (PK_BYTES + 4));
   t->peers[i].head_count = count;
+}
+
+// Seals team key epoch to pk and sends it.
+U0 SendKey(Station *s, Link *link, U8 *pk, I64 epoch)
+{
+  U8 *msg = MAlloc(MSG_MAX);
+  msg[0] = MSG_KEY;
+  MemCpy(msg + 1, pk, PK_BYTES);
+  Put16(msg + 1 + PK_BYTES, epoch);
+  if (SealKeyTo(msg + 3 + PK_BYTES, s->keys[epoch], pk))
+    LinkSend(link, msg, GRANT_LEN);
+  Free(msg);
 }
 
 // Answers heads: sends every entry the other station is missing, oldest
@@ -256,6 +284,13 @@ U0 TeamReceive(Station *s, Team *t, Link *link, U8 *msg, I64 len)
         U8 name[NAME_MAX];
         CopyText(name, plain + PK_BYTES, NAME_MAX);
         NotePeer(t, plain, name, plain + PK_BYTES + NAME_MAX + 1, count);
+        // A member still on an older key missed a key change: send the
+        // newer ones. A removed station isn't a member, so it gets nothing.
+        Bool i_admin = s->log->has_admin && Same(s->log->admin, s->pk, PK_BYTES);
+        if (i_admin && epoch < s->epoch && !Same(plain, s->pk, PK_BYTES) && IsMember(s->log, plain))
+          for (I64 ep = epoch + 1; ep <= s->epoch; ep++)
+            if (s->have_key[ep])
+              SendKey(s, link, plain, ep);
         AnswerHeads(s, link, plain + PK_BYTES + NAME_MAX + 1, count);
       }
     } else {
@@ -267,6 +302,32 @@ U0 TeamReceive(Station *s, Team *t, Link *link, U8 *msg, I64 len)
 
 // Admin approves the pending join: a MEMBER_ADD entry for everyone, and
 // the team key sealed to the new member.
+// Manager only: removes pk from the team, then starts a new team key and
+// sends it to everyone still in. From then on the removed person can't
+// read new entries; what they already had stays readable to them.
+Bool RemoveMember(Station *s, Link *link, U8 *pk)
+{
+  Log *log = s->log;
+  if (!log->has_admin || !Same(log->admin, s->pk, PK_BYTES) || Same(pk, s->pk, PK_BYTES) || !IsMember(log, pk))
+    return FALSE;
+  I64 next = s->epoch + 1;
+  if (next >= MAX_EPOCHS)
+    return FALSE;
+  U8 *msg = MAlloc(MSG_MAX);
+  LinkSend(link, msg, Post(s, KIND_REMOVE, PHASE_NONE, pk, PK_BYTES, msg));
+  Free(msg);
+  randombytes_buf(s->keys[next], KEY_BYTES);
+  s->have_key[next] = TRUE;
+  s->epoch = next;
+  SaveSecrets(s);
+  for (I64 i = 0; i < log->count; i++) {
+    Entry *e = &log->entries[i];
+    if (e->kind == KIND_MEMBER_ADD && e->status == ST_OK && e->body_len >= PK_BYTES && IsMember(log, e->body))
+      SendKey(s, link, e->body, next);
+  }
+  return TRUE;
+}
+
 // role, if given, follows the name after a newline.
 U0 ApproveJoin(Station *s, Team *t, Link *link, U8 *role = NULL)
 {
@@ -285,11 +346,10 @@ U0 ApproveJoin(Station *s, Team *t, Link *link, U8 *role = NULL)
   }
   LinkSend(link, msg, Post(s, KIND_MEMBER_ADD, PHASE_NONE, body, len, msg));
 
-  msg[0] = MSG_KEY;
-  MemCpy(msg + 1, t->join_pk, PK_BYTES);
-  Put16(msg + 1 + PK_BYTES, s->epoch);
-  if (SealKeyTo(msg + 3 + PK_BYTES, s->keys[s->epoch], t->join_pk))
-    LinkSend(link, msg, GRANT_LEN);
+  // Every key so far, so they can read entries from before a removal too.
+  for (I64 ep = 0; ep <= s->epoch; ep++)
+    if (s->have_key[ep])
+      SendKey(s, link, t->join_pk, ep);
   t->join_pending = FALSE;
   Free(msg);
 }

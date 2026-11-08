@@ -241,6 +241,9 @@ I32 Main(I32 argc, U8 **argv)
   Shot(a, "comms");
   a->view = V_TEAM;
   Shot(a, "team-roles");
+  MemCpy(a->sel_pk, b->pk, PK_BYTES);
+  a->sel_on = TRUE;
+  Shot(a, "team-manage");
   "rendered\n";
   return 0;
 }

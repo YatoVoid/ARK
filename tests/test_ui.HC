@@ -98,7 +98,7 @@ U0 Deliver(Station *from, Station *to)
 I32 Main(I32 argc, U8 **argv)
 {
   CryptoInit();
-  system("rm -rf build/tmp-ui-test build/tmp-ui-test-b");
+  system("rm -rf build/tmp-ui-test build/tmp-ui-test-b build/tmp-ui-test-c");
   App *a = AppNew("build/tmp-ui-test", "/nonexistent", NULL);
   if (!CanvasOpen(a->cv, "test", "assets/fonts")) {
     "canvas: %s\n", SDL_GetError();
@@ -438,6 +438,73 @@ I32 Main(I32 argc, U8 **argv)
     Draw(a);
   }
   Check(TRUE, "every page draws with a cut, alerts and server events in the log");
+
+  // Managing the team: change a role, then remove someone.
+  a->view = V_TEAM;
+  a->msg[0] = 0;
+  Draw(a);
+  CollectMembers(a);
+  I64 mi = -1;
+  for (I64 i = 0; i < a->member_count; i++)
+    if (Same(a->members[i].pk, b->pk, PK_BYTES))
+      mi = i;
+  Check(mi >= 0 && Click(a, H_MEMBER, mi) && a->sel_on, "the manager can open a member");
+  Draw(a);
+  Check(Click(a, H_SET_ROLE, 3), "a new role can be picked");
+  RoleNow(a->st->log, b->pk, role);
+  Check(StrCmp(role, "Executive") == 0, "the role change is in the log");
+  I64 ep = a->st->epoch;
+  Draw(a);
+  Click(a, H_REMOVE);
+  Check(IsMember(a->st->log, b->pk), "one Remove press only arms it");
+  Draw(a);
+  Click(a, H_REMOVE);
+  Check(!IsMember(a->st->log, b->pk) && a->st->epoch == ep + 1 && a->st->have_key[ep + 1],
+        "a second press removes them and starts a new team key");
+  for (I64 i = 0; i < a->st->log->count; i++)
+    if (a->st->log->entries[i].epoch == ep)
+      StationReceive(b, msg, MakeMessage(a->st, &a->st->log->entries[i], msg));
+  Check(RemovedOnce(b->log, b->pk) && !IsMember(b->log, b->pk), "the removed station learns it was removed");
+  len = Post(a->st, KIND_NOTE, PHASE_CONTAIN, "after the removal", 17, msg);
+  Check(Receive(b, msg, len) == RX_NO_KEY, "the removed station can't open anything new");
+  // m is the same analyst, with its chain up to date.
+  for (I64 i = 0; i < a->st->log->count; i++)
+    if (a->st->log->entries[i].epoch == ep)
+      StationReceive(m->st, msg, MakeMessage(a->st, &a->st->log->entries[i], msg));
+  Draw(m);
+  Check(StrNCmp(m->title, "ARK  Removed: ", 14) == 0, "the removed station's title says so");
+  // A fresh member, removed, then posting: flagged NOT A MEMBER.
+  Station *c = MAlloc(sizeof(Station));
+  StationInit(c, "build/tmp-ui-test-c");
+  StationCreate(c, c->dir, "Riley", "a third passphrase");
+  for (I64 k = 0; k <= a->st->epoch; k++) {
+    MemCpy(c->keys[k], a->st->keys[k], KEY_BYTES);
+    c->have_key[k] = TRUE;
+  }
+  c->epoch = a->st->epoch;
+  a->team.join_pending = TRUE;
+  MemCpy(a->team.join_pk, c->pk, PK_BYTES);
+  StrCpy(a->team.join_name, "Riley");
+  Approve(a);
+  for (I64 i = 0; i < a->st->log->count; i++)
+    StationReceive(c, msg, MakeMessage(a->st, &a->st->log->entries[i], msg));
+  Check(RemoveMember(a->st, &a->link, c->pk), "the manager removes a second member");
+  for (I64 i = 0; i < a->st->log->count; i++)
+    if (a->st->log->entries[i].kind == KIND_REMOVE)
+      StationReceive(c, msg, MakeMessage(a->st, &a->st->log->entries[i], msg));
+  len = Post(c, KIND_CHAT, PHASE_CONTAIN, "still here", 10, msg);
+  StationReceive(a->st, msg, len);
+  Bool flagged = FALSE;
+  for (I64 i = 0; i < a->st->log->count; i++)
+    if (StrCmp(a->st->log->entries[i].body, "still here") == 0)
+      flagged = a->st->log->entries[i].status == ST_NOT_MEMBER;
+  Check(flagged, "what a removed member writes afterwards is flagged NOT A MEMBER");
+  CollectMembers(a);
+  Bool listed = FALSE;
+  for (I64 i = 0; i < a->member_count; i++)
+    if (Same(a->members[i].pk, b->pk, PK_BYTES))
+      listed = TRUE;
+  Check(!listed, "the removed member is off the Team list");
 
   Click(a, H_LOCK);
   Check(!a->quit, "one lock press only arms it");

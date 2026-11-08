@@ -32,6 +32,8 @@
 #define KIND_ALERT      6   // body: text, sent to the manager
 #define KIND_NETWORK    7   // body: "Cut ..." or "Restored ...", this station's internet
 #define KIND_EVENT      8   // body: source|user|host|detail, see events.HC
+#define KIND_ROLE       9   // body: 32-byte public key, then the new role; manager only
+#define KIND_REMOVE    10   // body: 32-byte public key; manager only, followed by a new team key
 
 #define PHASE_NONE      0
 #define PHASE_DETECT    1
@@ -159,20 +161,52 @@ Entry *LogFind(Log *log, U8 *author, I64 seq)
   return NULL;
 }
 
-// Was pk admitted by the admin before this entry? The admin always is.
-Bool IsMember(Log *log, U8 *pk)
+// Was pk a member at Lamport time at? Admitted by the admin, and not
+// removed before at, unless admitted again after the removal. The admin
+// always is.
+Bool IsMemberAt(Log *log, U8 *pk, U64 at)
 {
   if (!log->has_admin)
     return FALSE;
   if (Same(pk, log->admin, PK_BYTES))
     return TRUE;
+  Bool added = FALSE;
+  U64 last_add = 0, last_remove = 0;
+  Bool removed = FALSE;
   for (I64 i = 0; i < log->count; i++) {
     Entry *e = &log->entries[i];
-    if (e->kind == KIND_MEMBER_ADD && e->status == ST_OK && e->body_len >= PK_BYTES &&
+    if (e->status != ST_OK || e->body_len < PK_BYTES || !Same(e->author, log->admin, PK_BYTES) ||
+        !Same(e->body, pk, PK_BYTES))
+      continue;
+    if (e->kind == KIND_MEMBER_ADD) {
+      added = TRUE;
+      if (e->lamport > last_add)
+        last_add = e->lamport;
+    } else if (e->kind == KIND_REMOVE && e->lamport < at) {
+      removed = TRUE;
+      if (e->lamport > last_remove)
+        last_remove = e->lamport;
+    }
+  }
+  return added && (!removed || last_add > last_remove);
+}
+
+// Did the admin ever remove pk?
+Bool RemovedOnce(Log *log, U8 *pk)
+{
+  for (I64 i = 0; i < log->count; i++) {
+    Entry *e = &log->entries[i];
+    if (e->kind == KIND_REMOVE && e->status == ST_OK && e->body_len >= PK_BYTES && log->has_admin &&
         Same(e->author, log->admin, PK_BYTES) && Same(e->body, pk, PK_BYTES))
       return TRUE;
   }
   return FALSE;
+}
+
+// Is pk a member now?
+Bool IsMember(Log *log, U8 *pk)
+{
+  return IsMemberAt(log, pk, 0x7FFFFFFFFFFFFFFF);
 }
 
 // Recomputes every entry's status. Membership can depend on entries that
@@ -220,7 +254,7 @@ U0 LogCheck(Log *log)
         if (before != NULL && before->status != ST_OK && before->status != ST_NOT_MEMBER)
           e->status = ST_BAD_CHAIN;
       }
-      if (e->status == ST_OK && !IsMember(log, e->author))
+      if (e->status == ST_OK && !IsMemberAt(log, e->author, e->lamport))
         e->status = ST_NOT_MEMBER;
     }
   }
