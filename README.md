@@ -38,36 +38,117 @@ Built for HackUTD (Winstead PC track: Cyber Incident Response Dashboard), Novemb
 - Optional: an Arduino UNO (or clone) running `firmware/panel`: the manager's internet kill switch (red), restore (green) and alert buzzer.
 - `socat` on the laptop, to turn a TCP connection into the serial port the station expects.
 
-## Quick start
+## Running the demo
 
-See [docs/BUILDING.md](docs/BUILDING.md).
+Every command, in order. [docs/DEMO.md](docs/DEMO.md) explains each step and has troubleshooting.
+
+**Install and build** (Arch; other distros in [docs/BUILDING.md](docs/BUILDING.md); hcc is built from source):
 
 ```sh
+sudo pacman -S sdl2-compat sdl2_ttf libsodium socat arduino-cli android-tools python-reportlab
+hcc src/main.HC -o build/ark
 ./tests/run.sh
 ```
 
-## Watching a server
-
-Run on the server the station sits on (the demo uses the same laptop):
+**Once, while you still have internet:**
 
 ```sh
-source tools/hooks/ark-shell.zsh      # or .bash / .fish: logs each typed command
-tools/ark-watch station-a             # sudo, ssh, su, account changes, and the hook
-tools/ark-watch station-a --access-log /var/log/nginx/access.log   # web requests too
-tools/drill.sh                        # rehearsal intrusion: logs attacker-style commands, runs none
+# panel (close the Arduino IDE first; its serial monitor holds the port)
+arduino-cli compile --fqbn arduino:avr:uno firmware/panel
+arduino-cli upload --fqbn arduino:avr:uno -p /dev/ttyUSB0 firmware/panel
+
+# relay hub onto the UNO Q
+adb devices
+adb shell mkdir -p /home/arduino/ark
+adb push relay/hub.py /home/arduino/ark/hub.py
+
+# report model, 3.4 GB
+ollama pull gemma3:4b
 ```
 
-Events show on every station's Server log within a second.
+The LED matrix animation is set up once from [firmware/relay-matrix/README.md](firmware/relay-matrix/README.md).
+
+**Clean slate** (close every ARK window first; this deletes both identities and the incident):
+
+```sh
+rm -rf station-a station-b build/tmp-*
+```
+
+**Start the model and the relay:**
+
+```sh
+curl -s 127.0.0.1:11434/api/tags >/dev/null || (setsid nohup ollama serve >/dev/null 2>&1 &)
+tools/ark-report --warm
+adb shell 'pgrep -f "^python3 hub.py" >/dev/null || (cd /home/arduino/ark && setsid nohup python3 hub.py > hub.log 2>&1 < /dev/null &)'
+adb shell 'ss -ltn | grep 4210'               # should print a LISTEN line
+```
+
+**Stations, on one laptop** (each in its own terminal):
+
+```sh
+ARK_COST_PER_RECORD=160 PANEL=/dev/ttyUSB0 ./station.sh station-a usb   # manager
+./station.sh station-b usb                                              # worker
+```
+
+**Or on two laptops.** Laptop A has the UNO Q and the panel on USB; laptop B is on the team's Wi-Fi:
+
+```sh
+# laptop A
+ARK_COST_PER_RECORD=160 PANEL=/dev/ttyUSB0 ./station.sh station-a usb
+adb shell nmcli dev wifi connect SSID password PASSWORD   # once: UNO Q joins the team Wi-Fi
+adb shell ip -4 addr show wlan0                           # its address
+
+# laptop B
+hcc src/main.HC -o build/ark
+./station.sh station-b wifi 10.147.184.235                # the UNO Q's address
+```
+
+**To rehearse without losing the internet**, start station A with stand-ins for the cut and restore:
+
+```sh
+ARK_CUT_CMD=true ARK_RESTORE_CMD=true PANEL=/dev/ttyUSB0 ./station.sh station-a usb
+```
+
+**In the windows:** A starts an incident, B joins and shows a 6-digit code, A approves it on the Team page (F9). Record what was hit on Scope (F4).
+
+**Feed the Server log** on laptop A:
+
+```sh
+tools/ark-watch station-a                     # sudo, ssh, su, account changes, typed commands
+tools/ark-watch station-a --access-log /var/log/nginx/access.log   # web requests too
+source tools/hooks/ark-shell.zsh              # or .bash / .fish, in the "attacker" shell
+tools/drill.sh                                # rehearsal intrusion: logs attacker-style commands, runs none
+DRILL_GAP=5 tools/drill.sh                    # same, slower
+```
+
+**The story:** B reports `cat /etc/shadow` to the manager, A's panel buzzes, A presses red (internet cut), then green (restored), then Request report on the Report page (F7). The PDF opens by itself.
+
+**Report from the command line:**
+
+```sh
+tools/ark-report station-a                    # what the button runs (needs a fresh export from the station)
+tools/ark-report station-a --no-ai            # figures and timeline only
+ARK_REPORT_MODEL=qwen2.5:3b ARK_OPEN_CMD=okular ./station.sh station-a usb   # other model, other PDF viewer
+```
+
+**Remake the GIF and screenshots:**
+
+```sh
+hcc tests/render_demo.HC -o build/render_demo && SDL_VIDEODRIVER=offscreen ./build/render_demo
+python3 tools/make-demo-gif.py                # writes docs/demo.gif
+hcc tests/render_views.HC -o build/render_views && SDL_VIDEODRIVER=offscreen ./build/render_views
+```
+
+**Shut down:** close both windows (each wipes its keys from memory), Ctrl+C `ark-watch`, then:
+
+```sh
+adb shell 'pkill -f "^python3 hub.py"'
+curl -s 127.0.0.1:11434/api/generate -d '{"model":"gemma3:4b","keep_alive":0}' >/dev/null   # frees the GPU
+```
 
 ## Report
 
 The Report page (F7) has a **Request report** button, for the manager and analysts alike. A few seconds later a PDF opens: what happened, a timeline, what was lost and what was protected, money at a cost per record you set, deadlines and next steps. Every figure and the timeline are computed from the signed log. A model on the same laptop writes only the summary and next steps, and each of its sentences has to cite the figures and timeline rows it rests on; a sentence that names anything not in what it cites is dropped. Nothing is sent anywhere.
-
-```sh
-ollama pull gemma3:4b                                    # once
-ARK_COST_PER_RECORD=160 PANEL=/dev/ttyUSB0 ./station.sh station-a usb
-tools/ark-report station-a --no-ai                       # figures only, from the command line
-```
 
 Without Ollama the report is still written, from the figures and timeline. Saved to `station-a/report/report.pdf` and `report.md`.
 

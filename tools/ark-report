@@ -574,8 +574,21 @@ def fallback_summary(f):
 
 # ---- markdown -----------------------------------------------------------------------
 
+def cite_words(cites):
+    """['F10', 'F9', 'T3'] -> 'key figures 9, 10; timeline 3'. The model works
+    with F and T ids; readers see the plain numbers both lists are printed with."""
+    figs = sorted(int(c[1:]) for c in cites if c.startswith("F"))
+    rows = sorted(int(c[1:]) for c in cites if c.startswith("T"))
+    parts = []
+    if figs:
+        parts.append("key figure%s %s" % ("" if len(figs) == 1 else "s", ", ".join(map(str, figs))))
+    if rows:
+        parts.append("timeline %s" % ", ".join(map(str, rows)))
+    return "; ".join(parts)
+
+
 def cite_tag(cites):
-    return " [%s]" % ", ".join(cites) if cites else ""
+    return " (%s)" % cite_words(cites) if cites else ""
 
 
 def render_md(f, ai, model, note):
@@ -586,7 +599,7 @@ def render_md(f, ai, model, note):
     w("Written %s from %s's copy of the ARK log (%d verified entries)." % (day(f["written"]), f["station"], f["entries"]))
     if ai is not None:
         w("Every figure and the timeline come from the signed log. The summary and next steps were written by %s "
-          "on this laptop; each sentence cites the figures (F) and timeline rows (T) it rests on." % model)
+          "on this laptop; each sentence ends with the key figures and timeline rows it rests on." % model)
     else:
         w("Every figure and the timeline come from the signed log. %s" % note)
     w("")
@@ -598,7 +611,7 @@ def render_md(f, ai, model, note):
     w("## Key figures")
     w("")
     for i, line in enumerate(f["facts"], 1):
-        w("- F%d. %s" % (i, line))
+        w("%d. %s" % (i, line))
     w("")
     w("## Timeline")
     w("")
@@ -606,7 +619,7 @@ def render_md(f, ai, model, note):
         for r in f["timeline"]:
             flag = " (flagged: it %s)" % r["flag"] if r["flag"] else ""
             note2 = " (%s)" % r["note"] if r["note"] and not r["flag"] else ""
-            w("- %s. %s %s%s%s" % (r["id"], clock(r["time"]), r["text"], flag, note2))
+            w("%s. %s %s%s%s" % (r["id"][1:], clock(r["time"]), r["text"], flag, note2))
     else:
         w("- Nothing on the server was flagged, and the team recorded no actions.")
     w("")
@@ -757,7 +770,7 @@ def render_pdf(f, ai, model, note, path):
         return Paragraph(escape(text), style)
 
     def cites_html(c):
-        return ' <font color="#8A93A8" size="7.5">[%s]</font>' % ", ".join(c) if c else ""
+        return ' <font color="#8A93A8" size="7.5">(%s)</font>' % cite_words(c) if c else ""
 
     story = []
     head = Table([[Paragraph('<font name="%s" size="20" color="white">ARK</font>'
@@ -815,7 +828,7 @@ def render_pdf(f, ai, model, note, path):
         elif r["note"]:
             flag = '<font color="#5B6478">%s</font>' % escape(r["note"])
         who = '<font color="#5B6478">TEAM</font>' if r["kind"] == "team" else '<font color="#5B6478">SERVER</font>'
-        rows.append([para(r["id"], s_cellm), para(clock(r["time"]), s_cellm),
+        rows.append([para(r["id"][1:], s_cellm), para(clock(r["time"]), s_cellm),
                      Paragraph(escape(r["text"]) + ("<br/>" + flag if flag else ""), s_cell),
                      Paragraph('<font size="6.5">%s</font>' % who, s_cell)])
     if len(rows) == 1:
@@ -892,15 +905,15 @@ def render_pdf(f, ai, model, note, path):
 
     block = [heading("Key figures")]
     for i, l in enumerate(f["facts"], 1):
-        block.append(Paragraph('<font name="%s" color="#8A93A8">F%d</font>&nbsp;&nbsp;%s' % (mono, i, escape(l)),
+        block.append(Paragraph('<font name="%s" color="#8A93A8">%d.</font>&nbsp;&nbsp;%s' % (mono, i, escape(l)),
                                P("fact", fontSize=8.5, leading=12)))
     story.append(KeepTogether(block))
     story.append(heading("About this report"))
     lines = about_lines(f, note)
     if ai is not None:
         lines.insert(0, "Figures, timeline, tables and deadlines are computed from the signed log. Only the summary and "
-                        "next steps were written by %s, on this laptop, and every sentence cites the figures (F) and "
-                        "timeline rows (T) it rests on; sentences naming anything not in what they cite were removed."
+                        "next steps were written by %s, on this laptop, and every sentence names the key figures and "
+                        "timeline rows it rests on; sentences naming anything not in what they cite were removed."
                      % model)
     for l in lines:
         story.append(para(l, s_muted))

@@ -115,6 +115,7 @@ check("staff address blamed for the attack is dropped",
 check("ordinal dates match the cited deadline",
       ok("Notify the Texas Attorney General by December 7th. [%s]" % fact(f, "Notification deadline: Texas Attorney")))
 check("a domain not in what it cites is dropped", not ok("Files went to evil-drop.ru. [%s]" % shadow))
+check("citations read as key figures and timeline rows", rep.cite_words(["F10", "F9", "T3"]) == "key figures 9, 10; timeline 3")
 check("a system named with its digits is checked as a name",
       ok("FS-01 was encrypted. [%s]" % fact(f, "System FS-01")))
 
@@ -203,12 +204,14 @@ sys.stderr = saved_err
 srv.shutdown()
 report = open(path).read()
 check("model text used and labelled", used and "## Summary (local model)" in report)
-check("model's cited sentence kept, with its citation", "read the password hashes. [T" in report)
+check("model's cited sentence kept, with its citation", "read the password hashes. (timeline " in report)
 check("model's invented amount dropped", "40,000,000" not in report)
 check("model blaming the staff address dropped", "10.0.4.22" not in report)
 check("uncited next step dropped", "500 new laptops" not in report and "Reset the password of svc-backup" in report)
 check("report says sentences were removed", "3 sentences from the model failed the citation check" in report)
 check("model asked for a fixed JSON shape", FakeOllama.seen.get("format", {}).get("required") == ["summary", "next_steps"])
+check("readers see plain numbers, not the model's ids", "\n1. Incident opened" in report and "\n3. " in report
+      and "- F1." not in report and "[F" not in report)
 check("figures still computed, not taken from the model", "4,532 x $160 = $725,120" in report)
 check("PDF written with the model's text", pdf and os.path.getsize(os.path.join(d, "report", "report.pdf")) > 5000)
 shutil.rmtree(d)

@@ -17,7 +17,7 @@ Tested on Arch Linux (kernel 7.2, KDE Wayland), November 2026.
 | gemma3:4b model (3.4 GB) | `ollama pull gemma3:4b` | |
 
 ```sh
-sudo pacman -S sdl2-compat sdl2_ttf libsodium socat arduino-cli
+sudo pacman -S sdl2-compat sdl2_ttf libsodium socat arduino-cli android-tools python-reportlab
 ```
 
 hcc: follow the [holyc-lang install guide](https://holyc-lang.com/docs/intro), or `scripts/build-linux.sh --install-hcc` from [holyc-graphics-guide](https://github.com/YatoVoid/holyc-graphics-guide). It installs to `~/.local`, so `~/.local/bin` has to be on your `PATH`.

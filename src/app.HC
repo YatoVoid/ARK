@@ -2783,6 +2783,19 @@ I64 ReportLine(App *a, U8 *src, I64 len, I64 x, I64 y, I64 w, Bool draw)
     }
     return rows * 20 + 4;
   }
+  I64 d = 0;
+  while (d < n && d < 3 && line[d] >= '0' && line[d] <= '9')
+    d++;
+  if (d > 0 && d + 1 < n && line[d] == '.' && line[d + 1] == ' ') {
+    U8 *body = line + d + 2;
+    I64 rows = Wrap(c, F_BODY, body, w - 32, starts, lens, 16);
+    if (draw) {
+      Text(c, F_MONO, x, y + 2, line, C_FAINT, 32, d + 1);
+      for (I64 i = 0; i < rows; i++)
+        Text(c, F_BODY, x + 32, y + i * 20, body + starts[i], C_TEXT, w - 32, lens[i]);
+    }
+    return rows * 20 + 4;
+  }
   I64 rows = Wrap(c, F_BODY, line, w, starts, lens, 16);
   for (I64 i = 0; draw && i < rows; i++)
     Text(c, F_BODY, x, y + i * 20, line + starts[i], C_TEXT, w, lens[i]);

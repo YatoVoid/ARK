@@ -146,7 +146,7 @@ sudo commands, SSH and su logins and failed passwords are picked up from the jou
 3. **On B,** press **Report to manager**. A's panel beeps three times and the alert sits at the top of A's control panel. B shows the row as REPORTED.
 4. **On A,** press **Acknowledge**, then the red button. The red LED lights, the top bar reads **Internet: CUT**, and a signed entry tells everyone. Chat between A and B keeps working.
 5. **On A,** press green once "backups are done". The green LED lights and the internet comes back. Only the manager's station can do this.
-6. **On A (or B),** open **Report** (F7) and press **Request report**. In about 8 seconds the PDF opens: summary, timeline, records lost and protected, the money estimate, deadlines and next steps. The summary and next steps were written by gemma3:4b on the laptop, and each sentence shows the figures (F) and timeline rows (T) it cites; everything else comes straight from the log. Saved as `station-a/report/report.pdf`.
+6. **On A (or B),** open **Report** (F7) and press **Request report**. In about 8 seconds the PDF opens: summary, timeline, records lost and protected, the money estimate, deadlines and next steps. The summary and next steps were written by gemma3:4b on the laptop, and each sentence ends with the key figures and timeline rows it cites; everything else comes straight from the log. Saved as `station-a/report/report.pdf`.
 
 Before the steps, record what was hit on the Scope page (F4), for example `FS-01`, PII, TX, 4120, ENCRYPTED and `NAS-02`, OTHER, 18000, CLEAN. The report's lost and protected figures come from there.
 
