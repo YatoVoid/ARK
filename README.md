@@ -47,7 +47,7 @@ The report after Request report, and the breach clocks:
 - **Phases.** DETECT, CONTAIN, ERADICATE, RECOVER. Only the manager moves the incident. An analyst who clicks a phase sends the manager a request, and the manager gets a **Move to** button for it.
 - **Scope and breach clocks.** Record which systems were hit, what data they held and whether it was lost. Notification deadlines (Texas, Texas AG, California, New York, GDPR, HIPAA) start from that.
 - **Report.** A PDF for the company: timeline, records lost and protected, money at a cost per record, deadlines, next steps. The figures come from the log. A model on the same laptop writes the summary, and every sentence cites the figures it rests on.
-- **Colour for skimming.** Red is act now (ALERT, CUT, ENCRYPTED, EXFILTRATED). Yellow is check it (SUSPECTED, WATCH). Green is safe (CLEAN, CONTAINED, RESTORED). Each phase has its own colour. Chat is grey.
+- **Read at a glance.** Red is act now (ALERT, CUT, ENCRYPTED, EXFILTRATED). Yellow is check it (SUSPECTED, WATCH). Green is safe (CLEAN, CONTAINED, RESTORED). Chat is grey. Pages, phases, event types, data types, panel buttons and status lights each have a symbol, tinted with the same colours. The Guide (F1) has the key.
 
 ## Try it on one laptop
 
@@ -61,15 +61,37 @@ hcc src/main.HC -o build/ark
 ./tests/run.sh                                 # ends with ALL TESTS PASSED
 ```
 
-**Start the hub and both windows**, each in its own terminal:
+**Start the report model** (optional; without it the PDF has figures and timeline only):
 
 ```sh
-python3 relay/hub.py                                                    # terminal 1: relay
-ARK_CUT_CMD=true ARK_RESTORE_CMD=true ./station.sh station-a wifi 127.0.0.1   # terminal 2: window A, manager
-./station.sh station-b wifi 127.0.0.1                                    # terminal 3: window B, analyst
+ollama pull gemma3:4b                          # once, 3.4 GB
+curl -s 127.0.0.1:11434/api/tags >/dev/null || (setsid nohup ollama serve >/dev/null 2>&1 &)
+tools/ark-report --warm                        # loads it into the GPU, about 10 s
 ```
 
-`ARK_CUT_CMD=true` and `ARK_RESTORE_CMD=true` stand in for `nmcli networking off/on`, so pressing CUT doesn't take your laptop offline. Leave them out only when you mean it. The hub listens on port 4210 on every interface. It only ever sees sealed lines.
+**Start the relay, window A and window B**, each in its own terminal and in this order:
+
+```sh
+python3 relay/hub.py                                                          # terminal 1: relay
+ARK_CUT_CMD=true ARK_RESTORE_CMD=true ./station.sh station-a wifi 127.0.0.1   # terminal 2: window A, manager
+./station.sh station-b wifi 127.0.0.1                                         # terminal 3: window B, analyst
+```
+
+`ARK_CUT_CMD=true` and `ARK_RESTORE_CMD=true` stand in for `nmcli networking off/on`, so pressing CUT doesn't take your laptop offline. Leave them out only when you mean it. The hub listens on port 4210 on every interface and only ever sees sealed lines.
+
+**Without the relay.** To look at the UI only, link the two stations with a pair of virtual serial ports instead:
+
+```sh
+socat pty,raw,echo=0,link=/tmp/ark-a pty,raw,echo=0,link=/tmp/ark-b &
+ARK_CUT_CMD=true ARK_RESTORE_CMD=true ./build/ark station-a /tmp/ark-a   # window A
+./build/ark station-b /tmp/ark-b                                         # window B
+```
+
+**Start over.** Close both windows, then delete both identities and the incident for good:
+
+```sh
+rm -rf station-a station-b build/tmp-*
+```
 
 **In the windows:**
 
@@ -107,7 +129,7 @@ cat /etc/shadow                                # fails without sudo, still logge
 5. **Window A:** **RESTORE NETWORK** once the systems are backed up.
 6. **Either window:** Report (F7), **Request report**. The PDF opens by itself.
 
-The report's summary needs Ollama with gemma3:4b (see [Report](#report)). Without it the PDF is still written, from the figures and timeline only.
+Lock each station with F12 twice when you're done. Stop the watcher and the hub with Ctrl+C.
 
 ## Full demo with the hardware
 
@@ -143,11 +165,7 @@ ollama pull gemma3:4b
 
 The LED matrix animation is set up once from [firmware/relay-matrix/README.md](firmware/relay-matrix/README.md).
 
-**Clean slate.** Close every ARK window first. This deletes both identities and the incident for good:
-
-```sh
-rm -rf station-a station-b build/tmp-*
-```
+**Clean slate:** close every ARK window, then `rm -rf station-a station-b build/tmp-*`.
 
 **Start the model and the relay:**
 
@@ -251,16 +269,20 @@ About 7 to 8 s per report on an RTX 3050 Laptop GPU once the model is loaded.
 | PgUp / PgDn | scroll the Server log and the report |
 | Esc | clear search, close the form |
 
-## Tests and screenshots
+## Tests, screenshots and the demo GIF
 
 ```sh
-./tests/run.sh                                 # everything; exit code 0 means all passed
+./tests/run.sh                                 # everything; ends with ALL TESTS PASSED
+```
+
+To regenerate the images in this README, run these in order. Warm the model first (`tools/ark-report --warm`) so the report frame has a summary. Rendering is offscreen, so no window opens.
+
+```sh
+python3 tools/make-icons.py                    # assets/icons from their SVG source (only after changing a symbol)
 hcc tests/render_views.HC -o build/render_views && SDL_VIDEODRIVER=offscreen ./build/render_views   # every page to build/ui-*.ppm
-hcc tests/render_demo.HC -o build/render_demo && SDL_VIDEODRIVER=offscreen ./build/render_demo
-python3 tools/make-demo-gif.py                 # docs/demo.gif from the render_demo frames
-python3 tools/make-demo-gif.py --mp4 demo.mp4  # the same frames as a video too
-python3 tools/make-screens.py                  # docs/screens/*.png: renders in a window frame
-python3 tools/make-icons.py                    # redraws assets/icons from their SVG source
+hcc tests/render_demo.HC -o build/render_demo && SDL_VIDEODRIVER=offscreen ./build/render_demo      # the demo story frames
+python3 tools/make-demo-gif.py --mp4 demo.mp4  # docs/demo.gif, and the same frames as a video
+python3 tools/make-screens.py                  # docs/screens/*.png, each in a window frame with its role title
 ```
 
 [docs/TESTING.md](docs/TESTING.md) lists what each test covers.
@@ -299,7 +321,7 @@ Known gaps: nothing tests frame loss or reordering, the hub has no test of its o
 - SDL2 bindings adapted from [YatoVoid/holyc-graphics-guide](https://github.com/YatoVoid/holyc-graphics-guide) (MIT).
 - [Inter](https://rsms.me/inter/) by Rasmus Andersson, [Fira Sans](https://github.com/mozilla/Fira) by Carrois for Mozilla, and [JetBrains Mono](https://www.jetbrains.com/lp/mono/), all under the SIL Open Font License (`assets/fonts`).
 - [libsodium](https://libsodium.org) for all cryptography.
-- Network icons in `assets/icons` are drawn by `tools/make-icons.py` for this project.
+- The icons and symbols in `assets/icons` are drawn by `tools/make-icons.py` for this project.
 
 ## License
 
