@@ -21,14 +21,14 @@ Built for HackUTD (Winstead PC track: Cyber Incident Response Dashboard), Novemb
 | Passphrase-sealed identity and keys on disk | done, tested |
 | Relay hub on an Arduino UNO Q, stations over USB and Wi-Fi | done, tested over real Wi-Fi |
 | Station window: overview, log with search, scope form, breach clocks, team, network, guide, on-screen control panel | done, tested (`test_ui`); two stations tested by hand before the redesign |
-| Arduino panel: approve, panic, LEDs, buzzer | approve button and LEDs tested on hardware |
+| Arduino panel: red CUT takes the machine off the internet, green RESTORE (manager only) brings it back, LEDs show which, buzzer for alerts | logic tested (`test_ui`); new firmware not yet flashed |
 | Breach-notification clocks (TX, TX AG, CA, NY, GDPR, HIPAA) | done, tested |
 
 ## Hardware
 
 - One laptop running Linux.
 - An Arduino UNO Q running `relay/hub.py`. One station connects over USB, the others over Wi-Fi.
-- Optional: an Arduino UNO (or clone) running `firmware/panel` as the physical approve button and panic switch.
+- Optional: an Arduino UNO (or clone) running `firmware/panel`: the manager's internet kill switch (red), restore (green) and alert buzzer.
 - `socat` on the laptop, to turn a TCP connection into the serial port the station expects.
 
 ## Quick start

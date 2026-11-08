@@ -26,7 +26,7 @@ Each station is one HolyC program that thinks it's talking to a serial port. soc
 | `src/canvas.HC` | 1440x900 pixel buffer, rounded boxes, text from glyphs SDL2_ttf renders once, scaling to the window | built |
 | `src/team.HC` | join requests, key grants, heads/sync, peer list | built, tested by hand |
 | `src/deadlines.HC` | breach-notification clocks | built, tested |
-| `firmware/panel/panel.ino` | Arduino UNO: approve and panic buttons, green/red LEDs, buzzer | approve button and LEDs tested |
+| `firmware/panel/panel.ino` | Arduino UNO: red CUT and green RESTORE buttons, LEDs for internet on/cut, buzzer for alerts | compiles; earlier version tested on hardware |
 
 ## Link layer (built)
 
@@ -74,7 +74,18 @@ The window is one 1440x900 pixel buffer, scaled to fit with the aspect ratio kep
 |---|---|
 | Sidebar | incident title, day, phase; pages with counts (entries, systems, nearest deadline, pending join); your name and key fingerprint |
 | Top bar | log search, the four phases (clicking one logs the change for everyone), relay and log-integrity status |
-| Control panel | the same controls as the hardware panel: APPROVE, PANIC, and status lights |
+| Control panel | the same controls as the hardware panel: the newest alert with Acknowledge, CUT NETWORK, RESTORE NETWORK, status lights, and Lock station |
 | Pages | Overview, Incident log, Scope, Breach clocks, Team, Network, Guide |
 
 Every frame records the clickable regions it drew. A click looks them up, newest first, so whatever was drawn on top wins. `tests/test_ui.HC` uses the same lookup to click through setup, posting, scope, search, approval and panic.
+
+## Alerts and the internet switch
+
+Two entry kinds carry them, so both are signed and in the record:
+
+| Kind | Body | Effect |
+|---|---|---|
+| `KIND_ALERT` (6) | text from an analyst | on other stations: the panel gives three beeps, the control panel and Overview show it until acknowledged |
+| `KIND_NETWORK` (7) | "Cut ..." or "Restored ..." | written by the station that ran the switch; its newest one says whether that machine is cut |
+
+CUT runs `ARK_CUT_CMD` (default `nmcli networking off`); RESTORE runs `ARK_RESTORE_CMD` (default `nmcli networking on`) and only works on the manager's (admin's) station. A failed command is logged as a failure and doesn't change the state. The relay link survives the cut: station A reaches the UNO Q over USB (adb) and loopback to socat, which NetworkManager doesn't manage.

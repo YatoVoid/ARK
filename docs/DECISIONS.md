@@ -93,3 +93,13 @@ The TempleOS screen tested well for looks and badly for use. People couldn't tel
 - **Fonts are bundled** (SIL OFL, in `assets/fonts`), so the window looks the same on any laptop. SDL2_ttf renders each glyph once at startup; drawing is then plain pixel copies.
 
 What this gives up: decision 11's "no rendering library to trust". SDL2_ttf and FreeType are back. They only ever see ARK's own strings and the bundled fonts, never network input as font data.
+
+## 14. The panel is an internet kill switch, not a panic button
+
+The scenario the panel serves: an analyst reading logs suspects someone is in the system and tampering with files. They send the manager an alert from ARK, and the manager's panel buzzes. The manager presses red, which takes the machine off the internet so any link the attacker had through it is gone. The team keeps working in ARK over the relay, encrypted end to end. When systems are backed up and the attacker is out, the manager presses green to restore.
+
+- **Cut on the machine with the panel only.** Cutting every station's internet from one button would also cut stations that reach the relay over Wi-Fi. Each cut is logged, so every station sees who cut what and when.
+- **Restore is manager-only; cut isn't.** Isolating early is the safe mistake. Reconnecting too early is the dangerous one.
+- **On screen, CUT takes two presses within 3 seconds**, so a stray click can't drop the internet. The hardware button is one press, because it's an emergency control in the manager's hand.
+- **Commands are environment variables** (`ARK_CUT_CMD`, `ARK_RESTORE_CMD`) so a deployment can block a firewall zone or drop a VPN instead of turning NetworkManager off.
+- **Wiping keys moved to "Lock station"** (on screen, or F12 twice). Join approval is on the Team page and F9.

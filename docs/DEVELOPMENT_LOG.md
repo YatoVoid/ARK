@@ -70,3 +70,13 @@ Checked without clicking through a window: `tests/render_views.HC` draws every p
 Two more hcc problems:
 - **A pointer argument read from a register a call already reused.** In `Clip(c, ...)`, the first `c->clip_x0 = MaxI64(x, 0)` was stored through `%rdi`, which by then held `x`. It crashed. The fix is to compute into locals first. A scan of the disassembly (a store through an argument register after a call, with no reload) found no other case in ARK.
 - **`F64` through `extern "c"` doesn't work.** `sqrt` from libm returned 0, so every rounded corner came out square. Corner coverage is now sampled with integers.
+
+## 2026-11-07 night, alerts and the internet kill switch
+
+The panel's buttons changed meaning (decision 14): red cuts the internet, green restores it, the buzzer sounds for alerts. New entry kinds ALERT and NETWORK, an Alert option in the composer (F5), and a control panel rebuilt around the alert, CUT and RESTORE.
+
+`test_ui` covers it with stand-in commands (`touch` and `rm` on a marker file), because running the real `nmcli networking off` on the dev laptop would also cut off the session doing the work. 47 checks pass, including: one on-screen press only arms CUT, the panel's CUT is one press, a failed command doesn't show as cut, only the manager can restore, alerts from members wait until acknowledged, the manager's own alerts don't alert them.
+
+Writing the test showed that an alert from someone who was never admitted gets NOT A MEMBER and is ignored, which is the behaviour we want.
+
+Not yet checked: the real `nmcli` cut with station A on USB, and the new firmware on the UNO.

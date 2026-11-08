@@ -14,6 +14,7 @@
 #include "../src/app.HC"
 
 extern "c" I32 system(U8 *command);
+extern "c" I32 setenv(U8 *name, U8 *value, I32 overwrite);
 
 U0 Note(App *a, I64 kind, I64 phase, U8 *text)
 {
@@ -33,7 +34,7 @@ U0 Shot(App *a, U8 *name)
 I32 Main(I32 argc, U8 **argv)
 {
   CryptoInit();
-  system("rm -rf build/tmp-ui");
+  system("rm -rf build/tmp-ui build/tmp-ui-b");
   App *a = AppNew("build/tmp-ui", "/nonexistent", NULL);
   if (!CanvasOpen(a->cv, "render", "assets/fonts")) {
     "canvas: %s\n", SDL_GetError();
@@ -78,6 +79,33 @@ I32 Main(I32 argc, U8 **argv)
     a->view = v;
     Shot(a, names[v]);
   }
+  // A member's alert arriving, then the manager cutting the internet.
+  a->team.join_pending = FALSE;
+  Station *b = MAlloc(sizeof(Station));
+  StationInit(b, "build/tmp-ui-b");
+  StationCreate(b, b->dir, "Marcus Hale", "another passphrase");
+  MemCpy(b->keys[0], a->st->keys[0], KEY_BYTES);
+  b->have_key[0] = TRUE;
+  b->epoch = 0;
+  a->team.join_pending = TRUE;
+  MemCpy(a->team.join_pk, b->pk, PK_BYTES);
+  StrCpy(a->team.join_name, "Marcus Hale");
+  Approve(a);
+  U8 *m2 = MAlloc(MSG_MAX);
+  for (I64 i = 0; i < a->st->log->count; i++)
+    StationReceive(b, m2, MakeMessage(a->st, &a->st->log->entries[i], m2));
+  U8 *alert = "Payroll share files rewritten at 03:12 from an admin account nobody on shift used. Looks like tampering.";
+  StationReceive(a->st, m2, Post(b, KIND_ALERT, PHASE_CONTAIN, alert, StrLen(alert), m2));
+  a->team.join_pending = FALSE;
+  a->view = V_OVERVIEW;
+  Shot(a, "alert");
+  a->alerts_acked = AlertCount(a);
+  setenv("ARK_CUT_CMD", "true", 1);
+  CutNetwork(a, "panel button");
+  Shot(a, "cut");
+  a->view = V_NETWORK;
+  Shot(a, "cut-network");
+  a->view = V_OVERVIEW;
   OpenScope(a);
   StrCpy(a->fields[FLD_ASSET].text, "Payroll share");
   a->fields[FLD_ASSET].len = 13;

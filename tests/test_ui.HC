@@ -14,6 +14,7 @@
 #include "../src/app.HC"
 
 extern "c" I32 system(U8 *command);
+extern "c" I32 setenv(U8 *name, U8 *value, I32 overwrite);
 
 I64 g_failed = 0;
 
@@ -59,7 +60,7 @@ Entry *Newest(App *a)
 I32 Main(I32 argc, U8 **argv)
 {
   CryptoInit();
-  system("rm -rf build/tmp-ui-test");
+  system("rm -rf build/tmp-ui-test build/tmp-ui-test-b");
   App *a = AppNew("build/tmp-ui-test", "/nonexistent", NULL);
   if (!CanvasOpen(a->cv, "test", "assets/fonts")) {
     "canvas: %s\n", SDL_GetError();
@@ -150,19 +151,70 @@ I32 Main(I32 argc, U8 **argv)
   Check(a->st->log->count == before + 1 && Newest(a)->kind == KIND_MEMBER_ADD && !a->team.join_pending,
         "approving logs MEMBER_ADD and clears the request");
 
+
+  // Stand-ins for nmcli, so the test never touches the real network.
+  setenv("ARK_CUT_CMD", "touch build/tmp-ui-test/cut", 1);
+  setenv("ARK_RESTORE_CMD", "rm build/tmp-ui-test/cut", 1);
+  Check(!Click(a, H_RESTORE), "RESTORE isn't clickable while the internet is on");
+  Click(a, H_CUT);
+  Check(!IsCut(a), "one on-screen CUT press only arms it");
+  Click(a, H_CUT);
+  Check(IsCut(a) && access("build/tmp-ui-test/cut", 0) == 0, "a second press runs the cut command and logs it");
+  Check(Newest(a)->kind == KIND_NETWORK, "the cut is a signed NETWORK entry");
+  before = a->st->log->count;
+  PanelCommand(a, "CUT");
+  Check(a->st->log->count == before, "cutting twice logs nothing new");
+  PanelCommand(a, "RESTORE");
+  Check(!IsCut(a) && access("build/tmp-ui-test/cut", 0) != 0, "the panel's RESTORE runs the restore command");
+  PanelCommand(a, "CUT");
+  Check(IsCut(a), "the panel's CUT works with one press");
+  setenv("ARK_RESTORE_CMD", "false", 1);
+  Click(a, H_RESTORE);
+  Check(IsCut(a), "a failed restore command leaves the cut in place");
+  setenv("ARK_CUT_CMD", "false", 1);
+  setenv("ARK_RESTORE_CMD", "true", 1);
+  Click(a, H_RESTORE);
+  Click(a, H_CUT);
+  Click(a, H_CUT);
+  Check(!IsCut(a), "a failed cut command is logged but not shown as cut");
+
+  // An alert from another member, as if it arrived over the relay.
+  Station *b = MAlloc(sizeof(Station));
+  StationInit(b, "build/tmp-ui-test-b");
+  StationCreate(b, b->dir, "Marcus", "another passphrase");
+  MemCpy(b->keys[0], a->st->keys[0], KEY_BYTES);
+  b->have_key[0] = TRUE;
+  b->epoch = 0;
+  a->team.join_pending = TRUE;
+  MemCpy(a->team.join_pk, b->pk, PK_BYTES);
+  StrCpy(a->team.join_name, "Marcus");
+  Approve(a);
+  U8 *msg = MAlloc(MSG_MAX);
+  for (I64 i = 0; i < a->st->log->count; i++)
+    StationReceive(b, msg, MakeMessage(a->st, &a->st->log->entries[i], msg));
+  I64 len = Post(b, KIND_ALERT, PHASE_CONTAIN, "Files on FS-01 changed at 03:12", 31, msg);
+  StationReceive(a->st, msg, len);
+  Check(AlertCount(a) == 1 && UnackedAlerts(a) == 1, "an alert from another station is waiting");
+  Check(Click(a, H_ACK), "Acknowledge is clickable");
+  Check(UnackedAlerts(a) == 0, "acknowledging clears it");
+  Click(a, H_KIND, KIND_ALERT);
+  Type(a, "testing");
+  Key(a, KEY_RETURN);
+  Check(Newest(a)->kind == KIND_ALERT && AlertCount(a) == 1 && UnackedAlerts(a) == 0, "my own alerts post but don't alert me");
+
   for (I64 v = 0; v < VIEWS; v++) {
     a->view = v;
     Draw(a);
   }
-  Check(TRUE, "every page draws");
+  Check(TRUE, "every page draws with a cut and an alert in the log");
 
-  Click(a, H_PANIC);
-  Check(!a->quit, "one PANIC press only arms it");
-  Click(a, H_PANIC);
-  Check(a->quit, "a second PANIC press wipes and quits");
+  Click(a, H_LOCK);
+  Check(!a->quit, "one lock press only arms it");
+  Key(a, KEY_F12);
+  Check(a->quit, "a second press wipes and quits");
   U8 zero[SK_BYTES];
   MemSet(zero, 0, SK_BYTES);
-  Check(Same(a->st->sk, zero, SK_BYTES), "PANIC zeroes the secret key");
+  Check(Same(a->st->sk, zero, SK_BYTES), "locking zeroes the secret key");
 
   CanvasClose(a->cv);
   if (g_failed > 0)

@@ -29,6 +29,8 @@
 #define KIND_CHAT       3   // body: text
 #define KIND_SCOPE      4   // body: asset|data type|residency|records|status
 #define KIND_MEMBER_ADD 5   // body: 32-byte public key, then name
+#define KIND_ALERT      6   // body: text, sent to the manager
+#define KIND_NETWORK    7   // body: "Cut ..." or "Restored ...", this station's internet
 
 #define PHASE_NONE      0
 #define PHASE_DETECT    1
