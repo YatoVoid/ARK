@@ -80,3 +80,9 @@ The panel's buttons changed meaning (decision 14): red cuts the internet, green 
 Writing the test showed that an alert from someone who was never admitted gets NOT A MEMBER and is ignored, which is the behaviour we want.
 
 Not yet checked: the real `nmcli` cut with station A on USB, and the new firmware on the UNO.
+
+## 2026-11-07, the relay's LED matrix
+
+The UNO Q's matrix showed Arduino's factory animation. It now plays an ARK animation, installed as a UNO Q App set as the boot default (`firmware/relay-matrix`). Frames are drawn by a Python script and checked as a GIF before flashing. The first preview had the cabin two columns off-center under the mast.
+
+`arduino-app-cli` failed under `adb shell` with `Stat /Data/Local/Tmp`: adb exports Android's `TMPDIR`. Setting `TMPDIR=/tmp` fixed it. The relay hub had stopped after a reboot of the board and was started again by hand; it doesn't start at boot yet.
