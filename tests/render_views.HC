@@ -57,7 +57,7 @@ I32 Main(I32 argc, U8 **argv)
 {
   CryptoInit();
   system("rm -rf build/tmp-ui build/tmp-ui-b");
-  App *a = AppNew("build/tmp-ui", "/nonexistent", NULL);
+  App *a = AppNew("build/tmp-ui", "/tmp/ark-station-a", NULL);
   if (!CanvasOpen(a->cv, "render", "assets/fonts")) {
     "canvas: %s\n", SDL_GetError();
     return 1;
@@ -137,12 +137,17 @@ I32 Main(I32 argc, U8 **argv)
   for (I64 i = 0; i < a->st->log->count; i++)
     StationReceive(b, m2, MakeMessage(a->st, &a->st->log->entries[i], m2));
   Station *mgr = a->st;
+  Peer seen = a->team.peers[0];
+  MemCpy(a->team.peers[0].pk, mgr->pk, PK_BYTES);
+  StrCpy(a->team.peers[0].name, mgr->name);
+  a->msg[0] = 0;
   a->st = b;
   a->view = V_OVERVIEW;
   Shot(a, "member-overview");
   a->view = V_NETWORK;
   Shot(a, "member-network");
   a->st = mgr;
+  a->team.peers[0] = seen;
   U8 *ask = "Asks to move the response to ERADICATE.";
   StationReceive(a->st, m2, Post(b, KIND_ALERT, PHASE_CONTAIN, ask, StrLen(ask), m2));
   a->view = V_OVERVIEW;

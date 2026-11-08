@@ -13,6 +13,32 @@ ARK is written in HolyC (compiled with [hcc](https://github.com/Jamesbarford/hol
 
 Built solo for HackUTD 2026, Winstead PC track (Cyber Incident Response Dashboard).
 
+## Screens
+
+The manager's window and an analyst's, right after the manager cut the internet. The window title says which is which.
+
+![The manager's Overview: nearest legal deadline, affected systems, what needs attention, the latest log rows, and the control panel with CUT and RESTORE](docs/screens/manager-overview.png)
+
+![The analyst's Overview: the same incident, with Alert the manager in place of the kill switch and a line saying Dana's laptop is offline](docs/screens/analyst-overview.png)
+
+The Server log, with `cat /etc/shadow` picked and the reason it was flagged:
+
+![Server log with suspicious commands in red and the picked event in full](docs/screens/server-log.png)
+
+An analyst asked to move to ERADICATE. The manager's alert card has the button for it:
+
+![Manager's control panel showing the request from Marcus Hale with Move to ERADICATE and Acknowledge](docs/screens/phase-request.png)
+
+The Network page on the analyst's station while the manager's laptop is offline:
+
+![Network page: this station, the untrusted relay and other stations, linked by sealed links](docs/screens/network.png)
+
+The report after Request report, and the breach clocks:
+
+![Report page with the model's summary citing key figures, and the numbered key figures](docs/screens/report.png)
+
+![Breach clocks: running notification deadlines with the law behind each](docs/screens/breach-clocks.png)
+
 ## What it does
 
 - **Two roles.** The station that starts the incident is the manager. Everyone who joins afterwards is an analyst, admitted by the manager after checking a six-digit code. Each window's title says which role it has, e.g. `ARK  Manager: Dana Kessler`.
@@ -77,7 +103,7 @@ cat /etc/shadow                                # fails without sudo, still logge
 1. Rows appear on both windows' Server log (F6). The flagged ones are red, and the sidebar counts the ones nobody has reported.
 2. **Window B:** filter to Suspicious, click `cat /etc/shadow`, press **Report to manager**.
 3. **Window A:** the alert sits at the top of the control panel. **Acknowledge**, then **CUT NETWORK** twice within 3 seconds. Both windows show A's laptop as off the internet, and chat keeps working.
-4. **Window B:** click ERADICATE in the top bar. A gets the request with a **Move to ERADICATE** button.
+4. **Window B:** click CONTAIN in the top bar. A gets the request with a **Move to CONTAIN** button.
 5. **Window A:** **RESTORE NETWORK** once the systems are backed up.
 6. **Either window:** Report (F7), **Request report**. The PDF opens by itself.
 
@@ -232,6 +258,8 @@ About 7 to 8 s per report on an RTX 3050 Laptop GPU once the model is loaded.
 hcc tests/render_views.HC -o build/render_views && SDL_VIDEODRIVER=offscreen ./build/render_views   # every page to build/ui-*.ppm
 hcc tests/render_demo.HC -o build/render_demo && SDL_VIDEODRIVER=offscreen ./build/render_demo
 python3 tools/make-demo-gif.py                 # docs/demo.gif from the render_demo frames
+python3 tools/make-demo-gif.py --mp4 demo.mp4  # the same frames as a video too
+python3 tools/make-screens.py                  # docs/screens/*.png: renders in a window frame
 python3 tools/make-icons.py                    # redraws assets/icons from their SVG source
 ```
 

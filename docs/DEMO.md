@@ -2,7 +2,7 @@
 
 ![ARK demo: watcher, analyst report, manager cut and restore, report](demo.gif)
 
-The GIF is drawn from the real code: `tests/render_demo.HC` runs both stations through the story below and `tools/make-demo-gif.py` lays out the screens with the hardware. Two differences from a live run: the render hands messages between stations directly instead of through the relay, and it skips the phase request in step 5.
+The GIF is drawn from the real code: `tests/render_demo.HC` runs both stations through the story below and `tools/make-demo-gif.py` lays out the screens with the hardware. The one difference from a live run is that the render hands messages between stations directly instead of through the relay.
 
 ## Who is who
 
@@ -157,7 +157,7 @@ sudo commands, SSH and su logins and failed passwords are picked up from the jou
 2. **On B,** filter to Suspicious and click `cat /etc/shadow`. The panel underneath shows who ran it, where, and why it was flagged.
 3. **On B,** press **Report to manager**. A's panel beeps three times and the alert sits at the top of A's control panel. B shows the row as REPORTED.
 4. **On A,** press **Acknowledge**, then the red button. The red LED lights, A's status reads **Internet CUT**, and a signed entry tells everyone. B's control panel shows A's laptop as offline. Chat between A and B keeps working.
-5. **On B,** click ERADICATE in the top bar. Only the manager moves the phase, so this sends A a request; A's panel beeps and the alert card has **Move to ERADICATE**.
+5. **On B,** click CONTAIN in the top bar. Only the manager moves the phase, so this sends A a request; A's panel beeps and the alert card has **Move to CONTAIN**.
 6. **On A,** press green once "backups are done". The green LED lights and the internet comes back. Only the manager's station has the kill switch, so only it restores.
 7. **On A (or B),** open **Report** (F7) and press **Request report**. In about 8 seconds the PDF opens: summary, timeline, records lost and protected, the money estimate, deadlines and next steps. The summary and next steps were written by gemma3:4b on the laptop, and each sentence ends with the key figures and timeline rows it cites; everything else comes straight from the log. Saved as `station-a/report/report.pdf`.
 
@@ -195,6 +195,7 @@ Everything looks and logs the same, but the network stays up. Drop the two varia
 hcc tests/render_demo.HC -o build/render_demo
 SDL_VIDEODRIVER=offscreen ./build/render_demo
 python3 tools/make-demo-gif.py                # writes docs/demo.gif
+python3 tools/make-demo-gif.py --mp4 demo.mp4 # and a video of the same frames
 ```
 
 Step 6 runs the real `tools/ark-report`, so start the model first; without it that frame shows a figures-only report.

@@ -31,9 +31,10 @@ U0 Deliver(Station *from, Station *to)
   Free(msg);
 }
 
-U0 Shot(App *a, U8 *step, U8 *who)
+U0 Shot(App *a, U8 *step, U8 *who, Bool keep_msg = FALSE)
 {
-  a->msg[0] = 0;
+  if (!keep_msg)
+    a->msg[0] = 0;
   Draw(a);
   U8 path[128];
   snprintf(path, 128, "build/demo-%s-%s.ppm", step, who);
@@ -71,13 +72,15 @@ U8 *g_scope[4] = {
 // The render runs in about a second, so every entry carries the same time.
 // For the report only, entries are given the times the story would take:
 // minutes between the intrusion steps, hours before the restore.
-// genesis, member, note, chat, 4 scope, 8 events, report, cut, restore
-I64 g_story[19] = {0, 30, 60, 120, 950, 960, 970, 980, 300, 330, 600, 640, 700, 760, 800, 830, 900, 1060, 10660};
+// genesis, member, note, chat, 4 scope, 8 events, report, cut, phase
+// request, phase move, restore
+I64 g_story[21] = {0, 30, 60, 120, 950, 960, 970, 980, 300, 330, 600, 640, 700, 760, 800, 830, 900, 1060, 1300, 1420,
+                   10660};
 
 U0 SpreadTimes(Log *log)
 {
   I64 base = log->entries[0].time - 11000;
-  for (I64 i = 0; i < log->count && i < 19; i++)
+  for (I64 i = 0; i < log->count && i < 21; i++)
     log->entries[i].time = base + g_story[i];
 }
 
@@ -167,18 +170,26 @@ I32 Main(I32 argc, U8 **argv)
   a->alerts_acked = AlertCount(a);
   CutNetwork(a, "panel button");
   Deliver(a->st, b->st);
-  b->view = V_LOG;
+  b->view = V_OVERVIEW;
   Shot(a, "4", "a");
   Shot(b, "4", "b");
 
-  // 5. Backups done, attacker out: manager presses green.
+  // 5. The analyst asks for CONTAIN; only the manager can move it.
+  SetPhase(b, PHASE_CONTAIN);
+  Deliver(b->st, a->st);
+  Shot(a, "5", "a");
+  Shot(b, "5", "b", TRUE);
+
+  // 6. The manager moves the phase, then restores once backups are done.
+  SetPhase(a, PHASE_CONTAIN);
+  a->alerts_acked = AlertCount(a);
   RestoreNetwork(a, "panel button");
   Deliver(a->st, b->st);
   a->view = V_NETWORK;
-  Shot(a, "5", "a");
-  Shot(b, "5", "b");
+  Shot(a, "6", "a");
+  Shot(b, "6", "b");
 
-  // 6. The manager writes the report for the company.
+  // 7. The manager writes the report for the company.
   SpreadTimes(a->st->log);
   setenv("ARK_COST_PER_RECORD", "160", 1);
   setenv("ARK_OPEN_CMD", "true", 1);
@@ -188,8 +199,8 @@ I32 Main(I32 argc, U8 **argv)
   a->report_state = RS_RUNNING;
   PollReport(a);
   b->view = V_LOG;
-  Shot(a, "6", "a");
-  Shot(b, "6", "b");
+  Shot(a, "7", "a");
+  Shot(b, "7", "b");
 
   Free(msg);
   "rendered demo\n";

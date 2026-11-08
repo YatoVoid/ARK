@@ -30,7 +30,8 @@ Each station is one HolyC program that thinks it's talking to a serial port. soc
 | `tools/ark-watch` | follows the journal (and optionally a web access log) and appends events to a station's feed | tested (`test_watch.py`), run live |
 | `tools/ark-report` | after-incident report as PDF and markdown: figures and timeline from the station's export, summary and next steps from a local model through Ollama, each sentence citing what it rests on | tested (`test_report.py`), run with gemma3:4b |
 | `tools/hooks/ark-shell.*` | bash, zsh and fish hooks that log each typed command to the journal | tested by hand |
-| `tests/render_demo.HC`, `tools/make-demo-gif.py` | run both stations through the demo story and turn the screens into `docs/demo.gif` | run |
+| `tests/render_demo.HC`, `tools/make-demo-gif.py` | run both stations through the demo story and turn the screens into `docs/demo.gif` (and a video with `--mp4`) | run |
+| `tools/make-screens.py` | puts renders in a window frame titled with the role, for `docs/screens` | run |
 | `tools/drill.sh` | a rehearsal intrusion for demos: logs attacker-style commands without running them | run |
 | `tools/make-icons.py` | draws the Network page icons as SVG and converts them to the raw RGBA files the station loads | run |
 | `firmware/panel/panel.ino` | Arduino UNO: red CUT and green RESTORE buttons, LEDs for internet on/cut, buzzer for alerts | compiles; earlier version tested on hardware |

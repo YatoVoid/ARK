@@ -3,7 +3,7 @@
 
     hcc tests/render_demo.HC -o build/render_demo
     SDL_VIDEODRIVER=offscreen ./build/render_demo
-    python3 tools/make-demo-gif.py
+    python3 tools/make-demo-gif.py [--mp4 PATH]
 
 Each frame: what the step is, both laptops' screens as the code drew them,
 and the hardware underneath with the links that step uses lit up.
@@ -28,7 +28,7 @@ BOXES = {
     "server": (40, 690, 240, 84, "FS-01, the watched server", "tools/ark-watch reads its journal"),
     "a": (400, 690, 240, 84, "Laptop A, manager", "station-a, Dana Kessler"),
     "q": (770, 690, 250, 84, "Arduino UNO Q, relay", "forwards sealed messages only"),
-    "b": (1150, 690, 240, 84, "Laptop B, worker", "station-b, Marcus Hale"),
+    "b": (1150, 690, 240, 84, "Laptop B, analyst", "station-b, Marcus Hale"),
     "net": (40, 860, 240, 84, "Internet", "and the company network"),
     "panel": (400, 860, 240, 84, "Arduino UNO, panel", "red CUT, green RESTORE, buzzer"),
     "model": (1150, 860, 240, 84, "Local AI model", "gemma3:4b on laptop A, offline"),
@@ -51,7 +51,7 @@ STEPS = [
         "led": GREEN, "note": "",
     },
     {
-        "title": "2  The worker checks a suspicious command",
+        "title": "2  The analyst checks a suspicious command",
         "sub": "Marcus filters to Suspicious and opens sudo cat /etc/shadow: who ran it, where, and why ARK flagged it.",
         "hot": {},
         "led": GREEN, "note": "",
@@ -69,13 +69,19 @@ STEPS = [
         "led": RED, "note": "red button pressed",
     },
     {
-        "title": "5  Backups done, attacker out: the manager presses green",
-        "sub": "Only the manager's station can restore. Both the cut and the restore are signed entries everyone can see.",
+        "title": "5  The analyst asks to move to CONTAIN",
+        "sub": "Only the manager moves the phase. Marcus's click sends a signed request; Dana's panel beeps and her alert card offers Move to CONTAIN.",
+        "hot": {"wifi": CYAN, "usb": CYAN, "serial": AMBER},
+        "led": RED, "note": "beep beep beep",
+    },
+    {
+        "title": "6  Backups done, attacker out: the manager presses green",
+        "sub": "Dana moves the incident to CONTAIN and restores the internet. Both are signed entries everyone can see.",
         "hot": {"serial": GREEN, "net": GREEN, "usb": CYAN, "wifi": CYAN},
         "led": GREEN, "note": "green button pressed",
     },
     {
-        "title": "6  The manager writes the report for the company",
+        "title": "7  The manager writes the report for the company",
         "sub": "ARK works out the figures from the signed log. A model on laptop A writes the summary in about 7 seconds, offline.",
         "hot": {"model": AMBER},
         "led": GREEN, "note": "",
@@ -114,7 +120,7 @@ def frame(step, n, shots, out):
     text(mvg, REG, 16, MUTED, 40, 108, step["sub"])
 
     for who, x in (("a", 40), ("b", 820)):
-        label = "LAPTOP A   manager   Dana Kessler" if who == "a" else "LAPTOP B   worker   Marcus Hale"
+        label = "LAPTOP A   manager   Dana Kessler" if who == "a" else "LAPTOP B   analyst   Marcus Hale"
         text(mvg, SEMI, 14, CYAN if who == "a" else PURPLE, x, 146, label)
         mvg.append("fill none stroke '%s' stroke-width 1 roundrectangle %d,%d %d,%d 6,6" % (LINE, x - 1, 155, x + 741, 155 + 491))
         mvg.append("image over %d,%d 740,490 '%s'" % (x, 156, shots[who]))
@@ -170,7 +176,7 @@ def frame(step, n, shots, out):
         color = AMBER if "beep" in step["note"] else step["led"]
         text(mvg, SEMI, 15, color, px + 150, py + 42, step["note"])
 
-    if n == 6:
+    if n == len(STEPS):
         text(mvg, REG, 12, FAINT, 1060, 975, "For the report, entries carry the times the story would take.")
     text(mvg, REG, 12, FAINT, 1060, 990, "Screens drawn by the ARK code (tests/render_demo.HC). Messages are handed")
     text(mvg, REG, 12, FAINT, 1060, 1005, "between stations directly in the render; in use they go through the relay.")
@@ -208,6 +214,17 @@ def main():
     for i, f in enumerate(frames, 1):
         subprocess.run(["magick", f, os.path.join(build, "demo-frame-%d.png" % i)], check=True)
     print("wrote", os.path.relpath(gif, ROOT), "%d KB" % (os.path.getsize(gif) // 1024))
+    if "--mp4" in sys.argv:
+        mp4 = sys.argv[sys.argv.index("--mp4") + 1]
+        listing = os.path.join(tmp, "frames.txt")
+        with open(listing, "w") as fh:
+            for i, f in enumerate(frames):
+                fh.write("file '%s'\nduration %s\n" % (f, "5.5" if i == len(frames) - 1 else "4.5"))
+            fh.write("file '%s'\n" % frames[-1])
+        subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", listing,
+                        "-vf", "fps=30,format=yuv420p", "-c:v", "libx264", "-crf", "18", "-movflags", "+faststart", mp4],
+                       check=True)
+        print("wrote", mp4, "%d KB" % (os.path.getsize(mp4) // 1024))
 
 
 if __name__ == "__main__":
