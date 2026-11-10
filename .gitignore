@@ -21,3 +21,6 @@ GEMINI.md
 .mcp.json
 anti-slop/
 .night-shift/
+
+# video production notes, kept local
+/production/*.md
