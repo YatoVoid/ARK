@@ -1,5 +1,5 @@
 // The station's window: setup screens, then a sidebar of pages, a top bar
-// with search and the incident phase, and a control panel on the right
+// with the incident phase and link state, and a control panel on the right
 // that mirrors the hardware panel. main.HC only parses arguments and runs
 // the loop; tests/render_views.HC draws every page from a sample log.
 
@@ -38,10 +38,8 @@
 #define FILTER_ALL   0
 #define FILTER_NOTE  1
 #define FILTER_CHAT  2
-#define FILTER_CMD   3
-#define FILTER_SCOPE 4
-#define FILTER_TEAM  5
-#define FILTERS      6
+#define FILTER_SCOPE 3
+#define FILTER_TEAM  4
 
 #define SF_ALL       0
 #define SF_SUS       1
@@ -64,6 +62,7 @@
 #define H_WHERE      12
 #define H_UNKNOWN    13
 #define H_APPROVE    14
+#define H_PANIC      15
 #define H_START      16
 #define H_JOIN       17
 #define H_CONTINUE   18
@@ -78,56 +77,6 @@
 #define H_WRITE      27
 #define H_CLEAR      28   // delete this station's data and start over
 #define H_BACK       29   // back to the name step, nothing written yet
-#define H_ALERT_MGR  30   // a member's panel: start an alert to the manager
-#define H_ROLE       31   // pick the role for the next approval
-#define H_MEMBER     32   // manager: open a member's role and removal controls
-#define H_SET_ROLE   33   // manager: change the open member's role
-#define H_REMOVE     34   // manager: remove the open member (press twice)
-
-// Glyphs from assets/icons/g-*.img, tinted when drawn.
-#define G_OVERVIEW   0
-#define G_SERVER     1
-#define G_CHAT       2
-#define G_SCOPE      3
-#define G_CLOCK      4
-#define G_TEAM       5
-#define G_NETWORK    6
-#define G_REPORT     7
-#define G_GUIDE      8
-#define G_GLOBEOFF   9
-#define G_BELL       10
-#define G_LOCK       11
-#define G_LOCKX      12
-#define G_GLOBE      13
-#define G_RELAY      14
-#define G_CHAIN      15
-#define G_TERMINAL   16
-#define G_SHIELD     17
-#define G_LOGIN      18
-#define G_ACCOUNT    19
-#define G_PII        20
-#define G_PHI        21
-#define G_PCI        22
-#define G_CRED       23
-#define G_FOLDER     24
-#define G_DETECT     25
-#define G_CONTAIN    26
-#define G_ERADICATE  27
-#define G_RECOVER    28
-#define G_PENCIL     29
-#define GLYPHS      30
-U8 *g_glyph_files[GLYPHS] = {"g-overview", "g-server", "g-chat", "g-scope", "g-clock", "g-team", "g-network",
-                             "g-report", "g-guide", "g-globeoff", "g-bell", "g-lock", "g-lockx", "g-globe",
-                             "g-relay", "g-chain", "g-terminal", "g-shield", "g-login", "g-account", "g-pii",
-                             "g-phi", "g-pci", "g-cred", "g-folder", "g-detect", "g-contain", "g-eradicate",
-                             "g-recover", "g-pencil"};
-I64 g_phase_glyph[5] = {G_GUIDE, G_DETECT, G_CONTAIN, G_ERADICATE, G_RECOVER};
-// Page order is V_OVERVIEW..V_GUIDE.
-I64 g_view_glyph[9] = {G_OVERVIEW, G_SERVER, G_CHAT, G_SCOPE, G_CLOCK, G_TEAM, G_NETWORK, G_REPORT, G_GUIDE};
-// Server event sources, in g_ev_source order: shell, sudo, login, fail, request, account.
-I64 g_ev_glyph[6] = {G_TERMINAL, G_SHIELD, G_LOGIN, G_LOCKX, G_GLOBE, G_ACCOUNT};
-// Data types, in g_data_types order.
-I64 g_type_glyph[5] = {G_PII, G_PHI, G_PCI, G_CRED, G_FOLDER};
 
 #define RS_NONE     0
 #define RS_RUNNING  1
@@ -163,11 +112,7 @@ U8 *g_scope_status[5] = {"ENCRYPTED", "EXFILTRATED", "SUSPECTED", "CONTAINED", "
 U8 *g_status_short[5] = {"locked by ransomware", "copied out", "not confirmed yet", "access cut off", "checked, not hit"};
 U8 *g_where_picks[5] = {"TX", "CA", "NY", "EU", "-"};
 U8 *g_where_labels[5] = {"TX", "CA", "NY", "EU", "None"};
-U8 *g_filter_names[FILTERS] = {"All", "Notes", "Floor", "Command", "Scope", "Team"};
-
-// Role colours (roles themselves are in log.HC) are identity only, for the
-// avatars, so they stay away from the red/amber/green status colours.
-U32 g_role_color[ROLES] = {0xFF6FA0E8, 0xFF45B9AE, 0xFFB18AE6, 0xFFD9B56B, 0xFFE07FA8, 0xFF9AA5BE, 0xFF8FB7C9};
+U8 *g_filter_names[5] = {"All", "Notes", "Chat", "Scope", "Team"};
 U8 *g_sfilter_names[5] = {"All", "Suspicious", "Commands", "Logins", "Requests"};
 U8 *g_month[12] = {"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
 U8 *g_wday[7] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
@@ -227,7 +172,6 @@ class App
   I64 focus;              // a FLD_ value, or -1
   I64 kind;               // KIND_NOTE or KIND_CHAT for the composer
   I64 filter;
-  I64 approve_role;       // index into g_roles for the next approval
   I64 scroll;             // log lines scrolled back from the newest
   Bool scope_open;
   I64 scope_type;         // -1 until picked
@@ -274,15 +218,6 @@ class App
   I64 feed_posted;        // events posted in it
   I64 feed_dropped;
   I64 clear_armed;        // time() of the first Clear press, 0 if not armed
-  U8 sel_pk[PK_BYTES];    // the member being edited on the Team page
-  Bool sel_on;
-  I64 remove_armed;       // time() of the first Remove press
-  I64 phase_asked;        // phase a member last asked the manager for
-  I64 phase_asked_at;     // and when, so a double click doesn't ask twice
-  U8 title[160];          // window title last set
-  Bool icons_loaded;
-  Image icon_laptop, icon_relay;
-  Image glyphs[GLYPHS];
   I64 report_state;       // RS_ value
   I64 report_started;
   Bool report_warmed;
@@ -368,7 +303,6 @@ Bool Ready(App *a)
 
 U0 Send(App *a, U8 *msg, I64 len)
 {
-  TagLink(&a->link, a->st);
   if (len > 0)
     LinkSend(&a->link, msg, len);
 }
@@ -442,12 +376,8 @@ Entry *NewestAlert(App *a)
   return best;
 }
 
-// Alerts are for the manager. Other stations see them in the chat, but
-// never the card, the Acknowledge button or the buzzer.
 I64 UnackedAlerts(App *a)
 {
-  if (!IsAdmin(a->st))
-    return 0;
   return MaxI64(0, AlertCount(a) - a->alerts_acked);
 }
 
@@ -461,23 +391,6 @@ Entry *LastNetwork(App *a, Bool mine)
     if (e->kind != KIND_NETWORK || e->status != ST_OK)
       continue;
     if (mine && !Same(e->author, a->st->pk, PK_BYTES))
-      continue;
-    if (best == NULL || e->lamport > best->lamport)
-      best = e;
-  }
-  return best;
-}
-
-// The manager's newest network entry, as every station sees it.
-Entry *ManagerNetwork(App *a)
-{
-  Log *log = a->st->log;
-  Entry *best = NULL;
-  if (!log->has_admin)
-    return NULL;
-  for (I64 i = 0; i < log->count; i++) {
-    Entry *e = &log->entries[i];
-    if (e->kind != KIND_NETWORK || e->status != ST_OK || !Same(e->author, log->admin, PK_BYTES))
       continue;
     if (best == NULL || e->lamport > best->lamport)
       best = e;
@@ -516,38 +429,15 @@ I64 OpenedAt(Log *log)
   return time(NULL);
 }
 
-Bool Letter(U8 ch)
-{
-  return (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z');
-}
-
-// "Asks to move the response to ERADICATE." -> 3, anything else -> 0.
-I64 RequestedPhase(U8 *text)
-{
-  U8 *lead = "Asks to move the response to ";
-  I64 n = StrLen(lead);
-  if (StrNCmp(text, lead, n) != 0)
-    return 0;
-  for (I64 p = 1; p <= 4; p++) {
-    I64 k = StrLen(g_phase_names[p]);
-    if (StrNCmp(text + n, g_phase_names[p], k) == 0 && !Letter(text[n + k]))
-      return p;
-  }
-  return 0;
-}
-
-// The phase of the manager's newest note. The manager's phase click posts
-// such a note, so every station agrees on the phase. Notes from analysts
-// carry a phase too, but only the manager's count, and that is checked here
-// on every station, not just hidden in the UI.
+// The phase of the newest note that set one. Clicking a phase in the top
+// bar posts such a note, so every station agrees on the phase.
 I64 IncidentPhase(App *a)
 {
   Log *log = a->st->log;
   LogSorted(log, a->order);
   for (I64 k = log->count - 1; k >= 0; k--) {
     Entry *e = &log->entries[a->order[k]];
-    if (e->kind == KIND_NOTE && e->status == ST_OK && e->phase >= 1 && e->phase <= 4 &&
-        log->has_admin && Same(e->author, log->admin, PK_BYTES))
+    if (e->kind == KIND_NOTE && e->status == ST_OK && e->phase >= 1 && e->phase <= 4)
       return e->phase;
   }
   return PHASE_DETECT;
@@ -597,13 +487,7 @@ U0 CollectMembers(App *a)
     if (e->kind == KIND_GENESIS && log->has_admin && Same(e->author, log->admin, PK_BYTES)) {
       MemCpy(m->pk, e->author, PK_BYTES);
       m->admin = TRUE;
-    } else if (e->kind == KIND_MEMBER_ADD && e->body_len > PK_BYTES && IsMember(log, e->body)) {
-      Bool dup = FALSE;
-      for (I64 j = 0; j < a->member_count; j++)
-        if (Same(a->members[j].pk, e->body, PK_BYTES))
-          dup = TRUE;
-      if (dup)
-        continue;
+    } else if (e->kind == KIND_MEMBER_ADD && e->body_len > PK_BYTES) {
       MemCpy(m->pk, e->body, PK_BYTES);
       m->admin = FALSE;
     } else {
@@ -623,17 +507,16 @@ Bool ClockStarted(Clock *clocks, I64 n, I64 rule)
   return FALSE;
 }
 
-// Severity: red is lost, yellow is not confirmed, green is safe.
 U32 StatusColor(U8 *status)
 {
   if (StrCmp(status, "EXFILTRATED") == 0)
     return C_RED;
   if (StrCmp(status, "ENCRYPTED") == 0)
-    return C_RED;
+    return C_PURPLE;
   if (StrCmp(status, "SUSPECTED") == 0)
     return C_AMBER;
   if (StrCmp(status, "CONTAINED") == 0)
-    return C_GREEN;
+    return C_CYAN;
   if (StrCmp(status, "CLEAN") == 0)
     return C_GREEN;
   return C_FAINT;
@@ -651,69 +534,7 @@ U32 LightOf(U32 color)
     return C_CYAN_FG;
   if (color == C_GREEN)
     return C_GREEN_FG;
-  if (color == C_FAINT)
-    return C_MUTED;
-  return Mix(0xFFFFFFFF, color, 70);
-}
-
-U32 PhaseColor(I64 p)
-{
-  if (p == 1)
-    return C_DETECT;
-  if (p == 2)
-    return C_CONTAIN;
-  if (p == 3)
-    return C_ERADICATE;
-  if (p == 4)
-    return C_RECOVER;
-  return C_FAINT;
-}
-
-#define KEYWORDS 14
-// Index 1 to 4 are the phases in order, so the index is the phase number.
-// CONTAINED comes before CONTAIN so the longer word wins.
-U8 *g_keywords[KEYWORDS] = {"CONTAINED", "DETECT", "CONTAIN", "ERADICATE", "RECOVER", "ENCRYPTED", "EXFILTRATED",
-                            "SUSPICIOUS", "ALERT", "CUT", "SUSPECTED", "WATCH", "CLEAN", "RESTORED"};
-
-U32 KeywordColor(I64 k)
-{
-  if (k == 0)
-    return C_GREEN_FG;
-  if (k <= 4)
-    return LightOf(PhaseColor(k));
-  if (k <= 9)
-    return C_RED_FG;
-  if (k <= 11)
-    return C_AMBER_FG;
-  return C_GREEN_FG;
-}
-
-// Draws len bytes of s, with phase and status words in their colors so a
-// line can be skimmed instead of read.
-U0 RichText(Canvas *c, I64 f, I64 x, I64 y, U8 *s, I64 len, U32 fg)
-{
-  Font *font = &c->font[f];
-  I64 px = Px(x), py = Px(y);
-  I64 left = 0;
-  U32 col = fg;
-  for (I64 i = 0; i < len; i++) {
-    if (left == 0) {
-      col = fg;
-      if (i == 0 || !Letter(s[i - 1])) {
-        for (I64 k = 0; k < KEYWORDS; k++) {
-          I64 kl = StrLen(g_keywords[k]);
-          if (i + kl <= len && StrNCmp(s + i, g_keywords[k], kl) == 0 && (i + kl == len || !Letter(s[i + kl]))) {
-            left = kl;
-            col = KeywordColor(k);
-            break;
-          }
-        }
-      }
-    }
-    px = DrawGlyph(c, font, px, py, s[i], col);
-    if (left > 0)
-      left--;
-  }
+  return C_MUTED;
 }
 
 U32 RemainingColor(I64 left)
@@ -748,19 +569,7 @@ U0 EntryText(Log *log, Entry *e, U8 *out)
       NameOf(log, e->body, name);
     else
       StrCpy(name, "?");
-    U8 role[NAME_MAX];
-    RoleOf(log, e->body, role);
-    if (role[0])
-      snprintf(out, BODY_MAX + 128, "Admitted %s to the team as %s", name, role);
-    else
-      snprintf(out, BODY_MAX + 128, "Admitted %s to the team", name);
-  } else if ((e->kind == KIND_ROLE || e->kind == KIND_REMOVE) && e->body_len >= PK_BYTES) {
-    U8 name[NAME_MAX];
-    NameOf(log, e->body, name);
-    if (e->kind == KIND_ROLE)
-      snprintf(out, BODY_MAX + 128, "Changed %s's role to %s", name, e->body + PK_BYTES);
-    else
-      snprintf(out, BODY_MAX + 128, "Removed %s from the team. Everyone else has a new team key.", name);
+    snprintf(out, BODY_MAX + 128, "Admitted %s to the team", name);
   } else if (e->kind == KIND_SCOPE) {
     U8 body[BODY_MAX + 1];
     StrCpy(body, e->body);
@@ -788,95 +597,41 @@ U0 EntryText(Log *log, Entry *e, U8 *out)
       out[i] = ' ';
 }
 
-// The tag at the start of a log row: what kind of entry, colored by how
-// much it matters. Returns FALSE for plain messages, which get no badge.
-Bool EntryTag(Entry *e, U8 *text, U8 *out, U32 *color)
+U0 KindTag(Entry *e, U8 *out)
 {
-  *color = C_FAINT;
-  if (e->kind == KIND_ALERT) {
+  if (e->kind == KIND_NOTE && e->phase >= 1 && e->phase <= 4)
+    snprintf(out, 24, "Note, %s", g_phase_names[e->phase]);
+  else if (e->kind == KIND_NOTE)
+    StrCpy(out, "Note");
+  else if (e->kind == KIND_CHAT)
+    StrCpy(out, "Chat");
+  else if (e->kind == KIND_SCOPE)
+    StrCpy(out, "Scope");
+  else if (e->kind == KIND_ALERT)
     StrCpy(out, "ALERT");
-    *color = C_RED;
-  } else if (e->kind == KIND_NETWORK && StrNCmp(text, "Restored", 8) == 0) {
-    StrCpy(out, "RESTORED");
-    *color = C_GREEN;
-  } else if (e->kind == KIND_NETWORK && StrNCmp(text, "Tried", 5) == 0) {
-    StrCpy(out, "FAILED");
-    *color = C_AMBER;
-  } else if (e->kind == KIND_NETWORK) {
-    StrCpy(out, "CUT");
-    *color = C_RED;
-  } else if (e->kind == KIND_SCOPE) {
-    StrCpy(out, "SCOPE");
-    for (I64 i = 0; i < 5; i++)
-      if (strstr(text, g_scope_status[i]) != NULL) {
-        *color = StatusColor(g_scope_status[i]);
-        break;
-      }
-  } else if (e->kind == KIND_NOTE && e->phase >= 1 && e->phase <= 4) {
-    StrCpy(out, g_phase_names[e->phase]);
-    *color = PhaseColor(e->phase);
-  } else if (e->kind == KIND_NOTE) {
-    StrCpy(out, "NOTE");
-  } else if (e->kind == KIND_CHAT) {
-    StrCpy(out, "chat");
-    return FALSE;
-  } else if (e->kind == KIND_COMMAND) {
-    StrCpy(out, "COMMAND");
-    *color = C_AMBER;
-  } else {
-    StrCpy(out, "team");
-    return FALSE;
-  }
-  return TRUE;
+  else if (e->kind == KIND_NETWORK)
+    StrCpy(out, "Network");
+  else
+    StrCpy(out, "Team");
 }
 
-I64 MyCaps(App *a)
+U32 KindColor(I64 kind)
 {
-  return RoleCaps(a->st->log, a->st->pk, 0x7FFFFFFFFFFFFFFF);
-}
-
-Bool Can(App *a, I64 cap)
-{
-  return (MyCaps(a) & cap) != 0;
-}
-
-// Floor chat and the Command channel are shown only to roles that may
-// read them. Every member holds the team key, so this is need to know on
-// screen, not encryption.
-Bool Visible(App *a, Entry *e)
-{
-  if (e->kind == KIND_CHAT)
-    return Can(a, CAN_FLOOR_READ);
-  if (e->kind == KIND_COMMAND)
-    return Can(a, CAN_CMD_READ);
-  return TRUE;
-}
-
-// May this station post kind from the composer?
-Bool CanPost(App *a, I64 kind)
-{
-  if (kind == KIND_NOTE || kind == KIND_CHAT)
-    return Can(a, CAN_FLOOR_POST);
-  if (kind == KIND_COMMAND)
-    return Can(a, CAN_CMD_POST);
-  return kind == KIND_ALERT && !IsAdmin(a->st);
+  if (kind == KIND_ALERT || kind == KIND_NETWORK)
+    return C_RED_FG;
+  return C_FAINT;
 }
 
 Bool PassesFilter(App *a, Entry *e, U8 *text)
 {
-  if (!Visible(a, e))
-    return FALSE;
   I64 f = a->filter;
   if (f == FILTER_NOTE && e->kind != KIND_NOTE)
     return FALSE;
   if (f == FILTER_CHAT && e->kind != KIND_CHAT)
     return FALSE;
-  if (f == FILTER_CMD && e->kind != KIND_COMMAND)
-    return FALSE;
   if (f == FILTER_SCOPE && e->kind != KIND_SCOPE)
     return FALSE;
-  if (f == FILTER_TEAM && e->kind != KIND_MEMBER_ADD && e->kind != KIND_GENESIS && e->kind != KIND_ROLE &&
-      e->kind != KIND_REMOVE)
+  if (f == FILTER_TEAM && e->kind != KIND_MEMBER_ADD && e->kind != KIND_GENESIS)
     return FALSE;
   Field *q = &a->fields[FLD_SEARCH];
   if (q->len > 0) {
@@ -977,32 +732,6 @@ Bool ServerPasses(App *a, I64 idx, Event *ev)
 
 // ---- widgets --------------------------------------------------------------
 
-I64 TypeGlyph(U8 *type)
-{
-  for (I64 i = 0; i < 5; i++)
-    if (StrCmp(type, g_data_types[i]) == 0)
-      return g_type_glyph[i];
-  return G_FOLDER;
-}
-
-U0 LoadIcons(App *a)
-{
-  if (a->icons_loaded)
-    return;
-  LoadImage(a->cv, "laptop", &a->icon_laptop);
-  LoadImage(a->cv, "relay", &a->icon_relay);
-  for (I64 i = 0; i < GLYPHS; i++)
-    LoadImage(a->cv, g_glyph_files[i], &a->glyphs[i]);
-  a->icons_loaded = TRUE;
-}
-
-// A glyph centred on (cx, cy), size units square.
-U0 Icon(App *a, I64 g, I64 cx, I64 cy, I64 size, U32 color)
-{
-  LoadIcons(a);
-  DrawImage(a->cv, &a->glyphs[g], cx - size / 2, cy - size / 2, size, color);
-}
-
 U0 AddHit(App *a, I64 x, I64 y, I64 w, I64 h, I64 id, I64 arg = 0)
 {
   if (a->hit_count == HITS)
@@ -1027,7 +756,7 @@ Bool Hover(App *a, I64 x, I64 y, I64 w, I64 h)
 #define BTN_RED      3
 #define BTN_OFF      4
 
-U0 Button(App *a, I64 x, I64 y, I64 w, I64 h, U8 *label, I64 style, I64 id, I64 arg = 0, I64 glyph = -1)
+U0 Button(App *a, I64 x, I64 y, I64 w, I64 h, U8 *label, I64 style, I64 id, I64 arg = 0)
 {
   Canvas *c = a->cv;
   U32 bg = C_SURFACE, border = C_LINE2, fg = C_TEXT;
@@ -1055,13 +784,7 @@ U0 Button(App *a, I64 x, I64 y, I64 w, I64 h, U8 *label, I64 style, I64 id, I64 
   if (style == BTN_PRIMARY)
     f = F_SEMI;
   I64 tw = TextWidth(c, f, label);
-  if (glyph >= 0) {
-    I64 lx = x + (w - tw - 22) / 2 + 22;
-    Icon(a, glyph, lx - 13, y + h / 2, 15, fg);
-    TextMid(c, f, lx, y + h / 2, label, fg, w - (lx - x) - 8);
-  } else {
-    TextMid(c, f, x + (w - tw) / 2, y + h / 2, label, fg, w - 16);
-  }
+  TextMid(c, f, x + (w - tw) / 2, y + h / 2, label, fg, w - 16);
   if (style != BTN_OFF)
     AddHit(a, x, y, w, h, id, arg);
 }
@@ -1126,7 +849,7 @@ U0 Input(App *a, I64 fld, I64 x, I64 y, I64 w, I64 h, U8 *placeholder, Bool secr
 }
 
 // A selectable tile: a title and a short description under it.
-U0 Choice(App *a, I64 x, I64 y, I64 w, I64 h, U8 *title, U8 *desc, Bool on, U32 dot, I64 id, I64 arg, I64 glyph = -1)
+U0 Choice(App *a, I64 x, I64 y, I64 w, I64 h, U8 *title, U8 *desc, Bool on, U32 dot, I64 id, I64 arg)
 {
   Canvas *c = a->cv;
   U32 bg = C_BG, border = C_LINE2;
@@ -1138,10 +861,7 @@ U0 Choice(App *a, I64 x, I64 y, I64 w, I64 h, U8 *title, U8 *desc, Bool on, U32 
   }
   Box(c, x, y, w, h, 6, bg, border);
   I64 tx = x + 12;
-  if (glyph >= 0) {
-    Icon(a, glyph, x + 20, y + 18, 16, C_TEXT);
-    tx = x + 34;
-  } else if (dot != 0) {
+  if (dot != 0) {
     Dot(c, x + 16, y + 18, 8, dot);
     tx = x + 26;
   }
@@ -1180,15 +900,13 @@ U0 DrawSide(App *a)
   snprintf(line, 64, "Day %ld", day);
   I64 y = 88 + lines * 18 + 16;
   I64 x = Text(c, F_SMALL, 20, y - 7, line, C_MUTED) + 10;
-  Badge(a, x, y, g_phase_names[IncidentPhase(a)], PhaseColor(IncidentPhase(a)));
+  Badge(a, x, y, g_phase_names[IncidentPhase(a)], C_CYAN);
 
   Clock clocks[RULES];
   I64 nclocks = Deadlines(log, clocks);
   CollectAssets(a);
   y = 176;
   for (I64 v = 0; v < VIEWS; v++) {
-    if (v == V_SERVER && !Can(a, CAN_SERVER_READ))
-      continue;
     if (v == V_GUIDE)
       y += 14;
     Bool on = a->view == v;
@@ -1202,8 +920,7 @@ U0 DrawSide(App *a)
       f = F_SEMI;
       fg = C_TEXT;
     }
-    Icon(a, g_view_glyph[v], 33, y + 18, 18, fg);
-    TextMid(c, f, 52, y + 18, g_view_names[v], fg);
+    TextMid(c, f, 24, y + 18, g_view_names[v], fg);
     U8 badge[24];
     badge[0] = 0;
     U32 bcol = C_FAINT;
@@ -1259,11 +976,25 @@ U0 DrawSide(App *a)
   if (IsAdmin(a->st))
     Text(c, F_SMALL, 20, g_ch - 56, "Manager, this station", C_MUTED);
   else
-    Text(c, F_SMALL, 20, g_ch - 56, "Analyst, this station", C_MUTED);
+    Text(c, F_SMALL, 20, g_ch - 56, "Member, this station", C_MUTED);
   U8 fp[32], keyline[40];
   Fingerprint(a->st->pk, fp);
   snprintf(keyline, 40, "key %s", fp);
   Text(c, F_MONO, 20, g_ch - 36, keyline, C_FAINT);
+}
+
+// A status chip in the top bar: coloured dot and a short label.
+U0 Chip(App *a, I64 x, I64 w, U8 *label, U32 color, I64 view)
+{
+  Canvas *c = a->cv;
+  I64 y = 14, h = 36;
+  U32 bg = Mix(color, C_BG, 30);
+  if (Hover(a, x, y, w, h))
+    bg = Mix(color, C_BG, 54);
+  Box(c, x, y, w, h, 6, bg, Mix(color, C_BG, 110));
+  Dot(c, x + 16, y + 18, 8, color);
+  TextMid(c, F_MED, x + 28, y + 18, label, LightOf(color), w - 36);
+  AddHit(a, x, y, w, h, H_NAV, view);
 }
 
 U0 DrawTop(App *a)
@@ -1275,57 +1006,53 @@ U0 DrawTop(App *a)
   Input(a, FLD_SEARCH, CX0, 14, 220, 36, "Search  (Ctrl+F)");
 
   I64 phase = IncidentPhase(a);
-  I64 x = CX0 + 236, w = 114;
+  I64 x = CX0 + 236, w = 104;
   for (I64 p = 1; p <= 4; p++) {
     U32 bg = C_BG, border = C_LINE, fg = C_FAINT;
     if (p < phase) {
       border = C_LINE2;
-      fg = Mix(PhaseColor(p), C_BG, 170);
+      fg = C_MUTED;
     }
     if (p == phase) {
-      bg = PhaseColor(p);
-      border = bg;
+      bg = C_CYAN;
+      border = C_CYAN;
       fg = C_BG;
     } else if (Hover(a, x, 14, w - 4, 36)) {
       border = Mix(0xFFFFFFFF, C_LINE2, 40);
     }
     Box(c, x, 14, w - 4, 36, 6, bg, border);
-    U8 *label = g_phase_names[p];
+    U8 label[24];
+    snprintf(label, 24, "%ld %s", p, g_phase_names[p]);
     I64 f = F_MED;
     if (p == phase)
       f = F_SEMI;
-    I64 lx = x + (w - 4 - TextWidth(c, f, label) - 20) / 2 + 20;
-    Icon(a, g_phase_glyph[p], lx - 11, 32, 14, fg);
-    TextMid(c, f, lx, 32, label, fg);
+    TextMid(c, f, x + (w - 4 - TextWidth(c, f, label)) / 2, 32, label, fg);
     if (p != phase)
       AddHit(a, x, 14, w - 4, 36, H_PHASE, p);
     x += w;
   }
-  if (!IsAdmin(a->st))
-    TextMid(a->cv, F_SMALL, x + 12, 32, "Set by the manager. Click a phase to ask for it.", C_FAINT);
+
 }
 
 // One status light in the control panel.
-U0 Light(App *a, I64 g, I64 y, U8 *label, U8 *state, U32 color)
+U0 Light(App *a, I64 y, U8 *label, U8 *state, U32 color)
 {
   Canvas *c = a->cv;
-  Icon(a, g, (g_cw - PANEL_W) + 28, y, 18, color);
+  Dot(c, (g_cw - PANEL_W) + 28, y, 12, color);
   TextMid(c, F_BODY, (g_cw - PANEL_W) + 44, y, label, C_MUTED);
   TextMid(c, F_SEMI, g_cw - 20 - TextWidth(c, F_SEMI, state), y, state, LightOf(color));
 }
 
 // A big hardware-style button: a darker lip under the face.
-U0 PanelButton(App *a, I64 g, I64 y, U8 *label, U8 *sub, U32 face, U32 lip, Bool on, I64 id)
+U0 PanelButton(App *a, I64 y, U8 *label, U8 *sub, U32 face, U32 lip, Bool on, I64 id)
 {
   Canvas *c = a->cv;
   I64 x = (g_cw - PANEL_W) + 16, w = PANEL_W - 32;
   U32 fg = C_TEXT, sfg = Mix(C_TEXT, face, 190);
-  I64 lw = TextWidth(c, F_BTN, label), lx = x + (w - lw - 24) / 2 + 24;
   if (!on) {
     // unavailable: an outline, not a dimmed slab that looks broken
     Box(c, x, y, w, 60, 10, C_PANEL, C_LINE2);
-    Icon(a, g, lx - 15, y + 22, 18, C_FAINT);
-    TextMid(c, F_BTN, lx, y + 22, label, C_FAINT);
+    TextMid(c, F_BTN, x + (w - TextWidth(c, F_BTN, label)) / 2, y + 22, label, C_FAINT);
     TextMid(c, F_SMALL, x + (w - TextWidth(c, F_SMALL, sub)) / 2, y + 42, sub, C_FAINT);
     return;
   } else if (Hover(a, x, y, w, 66)) {
@@ -1333,8 +1060,7 @@ U0 PanelButton(App *a, I64 g, I64 y, U8 *label, U8 *sub, U32 face, U32 lip, Bool
   }
   Round(c, x, y, w, 66, 10, lip);
   Round(c, x, y, w, 60, 10, face);
-  Icon(a, g, lx - 15, y + 22, 18, fg);
-  TextMid(c, F_BTN, lx, y + 22, label, fg);
+  TextMid(c, F_BTN, x + (w - TextWidth(c, F_BTN, label)) / 2, y + 22, label, fg);
   TextMid(c, F_SMALL, x + (w - TextWidth(c, F_SMALL, sub)) / 2, y + 42, sub, sfg);
   if (on)
     AddHit(a, x, y, w, 66, id);
@@ -1383,7 +1109,7 @@ U0 DrawPanel(App *a)
     if (admin)
       StrCpy(sub, "Restore once systems are backed up and the attacker is removed.");
     else
-      StrCpy(sub, "Restore it below when the team is ready.");
+      StrCpy(sub, "Only the manager can restore it.");
     border = Mix(C_RED, C_PANEL, 140);
   } else if (a->team.join_pending && admin) {
     I64 code = JoinCode(a->team.join_pk);
@@ -1397,11 +1123,7 @@ U0 DrawPanel(App *a)
     StrCpy(sub, "The buzzer sounds when a team member sends you an alert.");
   }
   I64 box_h = 92;
-  Bool ask = ack && admin && RequestedPhase(AlertText(alert->body)) > 0 &&
-             RequestedPhase(AlertText(alert->body)) != IncidentPhase(a);
-  if (ask)
-    box_h = 172;
-  else if (ack)
+  if (ack)
     box_h = 134;
   Box(c, x, y, w, box_h, 8, tint, border);
   Text(c, F_SEMI, x + 14, y + 12, title, tc, w - 28);
@@ -1411,79 +1133,42 @@ U0 DrawPanel(App *a)
   for (I64 i = 0; i < n; i++)
     Text(c, F_SMALL, x + 14, y + 34 + i * 16, sub + starts[i], C_MUTED, w - 28, lens[i]);
   if (ack) {
-    if (ask) {
-      I64 want = RequestedPhase(AlertText(alert->body));
-      U8 move[32];
-      snprintf(move, 32, "Move to %s", g_phase_names[want]);
-      Button(a, x + 14, y + box_h - 78, w - 28, 30, move, BTN_PRIMARY, H_PHASE, want, g_phase_glyph[want]);
-      Button(a, x + 14, y + box_h - 40, w - 28, 30, "Acknowledge", BTN_GHOST, H_ACK);
-    } else {
-      Button(a, x + 14, y + box_h - 40, w - 28, 30, "Acknowledge", BTN_GHOST, H_ACK);
-    }
+    Button(a, x + 14, y + box_h - 40, w - 28, 30, "Acknowledge", BTN_GHOST, H_ACK);
   }
 
   y += box_h + 16;
-  I64 y0 = y;
-  if (admin) {
-    if (cut)
-      PanelButton(a, G_GLOBEOFF, y, "NETWORK CUT", "this machine is offline", C_RED_BTN, C_RED_DK, FALSE, H_CUT);
-    else
-      PanelButton(a, G_GLOBEOFF, y, "CUT NETWORK", "press twice: take this machine offline", C_RED_BTN, C_RED_DK, TRUE, H_CUT);
-    y += 82;
-    if (cut)
-      PanelButton(a, G_GLOBE, y, "RESTORE NETWORK", "after backups and cleanup", C_GREEN_BTN, C_GREEN_DK, TRUE, H_RESTORE);
-    else
-      PanelButton(a, G_GLOBE, y, "RESTORE NETWORK", "internet is on", C_GREEN_BTN, C_GREEN_DK, FALSE, H_RESTORE);
-  } else {
-    if (cut)
-      PanelButton(a, G_GLOBE, y, "RESTORE NETWORK", "bring this machine back online", C_GREEN_BTN, C_GREEN_DK, TRUE, H_RESTORE);
-    else
-      PanelButton(a, G_BELL, y, "ALERT THE MANAGER", "their panel buzzes", C_RED_BTN, C_RED_DK, TRUE,
-                  H_ALERT_MGR);
-    y += 82;
-    // Where the kill switch is, and what state it's in.
-    U8 boss[NAME_MAX], line[96];
-    StrCpy(boss, "the manager");
-    if (a->st->log->has_admin)
-      NameOf(a->st->log, a->st->log->admin, boss);
-    Entry *mn = ManagerNetwork(a);
-    Bool mcut = mn != NULL && StrNCmp(mn->body, "Cut", 3) == 0;
-    Box(c, x, y, w, 60, 10, C_PANEL, C_LINE2);
-    snprintf(line, 96, "Kill switch: %s's laptop", boss);
-    Text(c, F_SMALL, x + 14, y + 12, line, C_MUTED, w - 28);
-    if (mcut) {
-      U8 when[8];
-      ClockText(mn->time, when);
-      snprintf(line, 96, "Offline since %s", when);
-      Dot(c, x + 20, y + 41, 8, C_RED);
-      Text(c, F_SEMI, x + 32, y + 33, line, C_RED_FG, w - 46);
-    } else {
-      Dot(c, x + 20, y + 41, 8, C_GREEN);
-      Text(c, F_SEMI, x + 32, y + 33, "Online", C_GREEN_FG, w - 46);
-    }
-  }
-  y = y0 + 82;
+  if (cut)
+    PanelButton(a, y, "NETWORK CUT", "this machine is offline", C_RED_BTN, C_RED_DK, FALSE, H_CUT);
+  else
+    PanelButton(a, y, "CUT NETWORK", "press twice: take this machine offline", C_RED_BTN, C_RED_DK, TRUE, H_CUT);
+  y += 82;
+  if (cut && admin)
+    PanelButton(a, y, "RESTORE NETWORK", "after backups and cleanup", C_GREEN_BTN, C_GREEN_DK, TRUE, H_RESTORE);
+  else if (cut)
+    PanelButton(a, y, "RESTORE NETWORK", "manager only", C_GREEN_BTN, C_GREEN_DK, FALSE, H_RESTORE);
+  else
+    PanelButton(a, y, "RESTORE NETWORK", "internet is on", C_GREEN_BTN, C_GREEN_DK, FALSE, H_RESTORE);
 
   y += 96;
   Text(c, F_SEMI, x, y, "Status", C_MUTED);
   y += 30;
   if (cut)
-    Light(a, G_GLOBEOFF, y, "Internet", "CUT", C_RED);
+    Light(a, y, "Internet", "CUT", C_RED);
   else
-    Light(a, G_GLOBE, y, "Internet", "ON", C_GREEN);
+    Light(a, y, "Internet", "ON", C_GREEN);
   y += 32;
   I64 online = OnlineCount(a);
   if (a->link.fd < 0)
-    Light(a, G_RELAY, y, "Relay link", "NONE", C_RED);
+    Light(a, y, "Relay link", "NONE", C_RED);
   else if (online == 0)
-    Light(a, G_RELAY, y, "Relay link", "ALONE", C_AMBER);
+    Light(a, y, "Relay link", "ALONE", C_AMBER);
   else
-    Light(a, G_RELAY, y, "Relay link", "OK", C_GREEN);
+    Light(a, y, "Relay link", "OK", C_GREEN);
   y += 32;
   if (ProblemCount(a) > 0)
-    Light(a, G_CHAIN, y, "Log integrity", "BROKEN", C_RED);
+    Light(a, y, "Log integrity", "BROKEN", C_RED);
   else
-    Light(a, G_CHAIN, y, "Log integrity", "OK", C_GREEN);
+    Light(a, y, "Log integrity", "OK", C_GREEN);
   y += 32;
   Clock clocks[RULES];
   I64 nclocks = Deadlines(a->st->log, clocks);
@@ -1491,20 +1176,20 @@ U0 DrawPanel(App *a)
   if (nclocks > 0)
     left = clocks[0].due - now;
   if (left < 72 * 3600)
-    Light(a, G_CLOCK, y, "Deadlines", "URGENT", C_RED);
+    Light(a, y, "Deadlines", "URGENT", C_RED);
   else if (left < 7 * 86400)
-    Light(a, G_CLOCK, y, "Deadlines", "THIS WEEK", C_AMBER);
+    Light(a, y, "Deadlines", "THIS WEEK", C_AMBER);
   else if (nclocks > 0)
-    Light(a, G_CLOCK, y, "Deadlines", "RUNNING", C_CYAN);
+    Light(a, y, "Deadlines", "RUNNING", C_CYAN);
   else
-    Light(a, G_CLOCK, y, "Deadlines", "NONE", C_GREEN);
+    Light(a, y, "Deadlines", "NONE", C_GREEN);
 
   HLine(c, (g_cw - PANEL_W) + 1, g_ch - 64, PANEL_W - 1, C_LINE);
   Bool lock_armed = a->lock_armed != 0 && now - a->lock_armed <= 3;
   U8 *lock = "Lock station  (F12 twice)";
   if (lock_armed)
     lock = "Press again to lock";
-  Button(a, x, g_ch - 50, w, 34, lock, BTN_GHOST, H_LOCK, 0, G_LOCK);
+  Button(a, x, g_ch - 50, w, 34, lock, BTN_GHOST, H_LOCK);
 }
 
 // A short notice after an action, for six seconds, in the free space at
@@ -1526,79 +1211,22 @@ U0 DrawFlash(App *a)
 
 // ---- composer -------------------------------------------------------------
 
-// A member whose incident has gone quiet while the lead of a different one
-// is on the relay: almost always a manager who cleared their station and
-// started again. Only the person at this laptop can fix it, by clearing.
-Bool OnOldIncident(App *a)
-{
-  Log *log = a->st->log;
-  I64 now = time(NULL);
-  if (!Ready(a) || !log->has_admin || IsAdmin(a->st) || now - a->team.other_lead_at > ONLINE_SECS)
-    return FALSE;
-  for (I64 i = 0; i < a->team.peer_count; i++) {
-    Peer *p = &a->team.peers[i];
-    if (Same(p->pk, log->admin, PK_BYTES) && now - p->heard <= ONLINE_SECS)
-      return FALSE;
-  }
-  return TRUE;
-}
-
-// Admitted once, then removed by the manager.
-Bool Removed(App *a)
-{
-  Log *log = a->st->log;
-  return log->has_admin && !IsAdmin(a->st) && a->st->epoch >= 0 && !IsMember(log, a->st->pk) &&
-         RemovedOnce(log, a->st->pk);
-}
-
 U0 DrawComposer(App *a)
 {
   Canvas *c = a->cv;
   I64 y = (g_ch - 20 - COMPOSE_H), x = CX0;
-  if (Removed(a)) {
-    Box(c, x, y, (g_cw - SIDE_W - PANEL_W - 2 * PAD), COMPOSE_H, 8, Mix(C_RED, C_SURFACE, 30), C_RED);
-    TextMid(c, F_SEMI, x + 20, y + COMPOSE_H / 2, "The manager removed you from this team. You can read what you already had, but nothing new reaches you.", C_RED_FG, (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 40);
-    return;
-  }
-  if (OnOldIncident(a)) {
-    I64 bw = (g_cw - SIDE_W - PANEL_W - 2 * PAD);
-    Box(c, x, y, bw, COMPOSE_H, 8, Mix(C_AMBER, C_SURFACE, 30), C_AMBER);
-    TextMid(c, F_SEMI, x + 20, y + 17, "Your manager is running a new incident. This laptop is still on the old one.", LightOf(C_AMBER), bw - 240);
-    TextMid(c, F_SMALL, x + 20, y + 37, "Nothing you send reaches anyone. Clear this station, then Join the new incident.", C_MUTED, bw - 240);
-    U8 *label = "Clear this station";
-    if (a->clear_armed != 0 && time(NULL) - a->clear_armed <= 3)
-      label = "Press again";
-    Button(a, x + bw - 200, y + 8, 188, 36, label, BTN_RED, H_CLEAR);
-    return;
-  }
   Card(a, x, y, (g_cw - SIDE_W - PANEL_W - 2 * PAD), COMPOSE_H);
-  if (!CanPost(a, a->kind)) {
-    a->kind = KIND_ALERT;
-    if (CanPost(a, KIND_NOTE))
-      a->kind = KIND_NOTE;
-    else if (CanPost(a, KIND_COMMAND))
-      a->kind = KIND_COMMAND;
-  }
   I64 bx = x + 8;
-  for (I64 k = 0; k < 4; k++) {
+  for (I64 k = 0; k < 3; k++) {
     I64 kind = KIND_NOTE;
     U8 *label = "Note";
-    I64 g = G_PENCIL;
     if (k == 1) {
       kind = KIND_CHAT;
-      label = "Floor";
-      g = G_CHAT;
+      label = "Chat";
     } else if (k == 2) {
-      kind = KIND_COMMAND;
-      label = "Command";
-      g = G_CHAT;
-    } else if (k == 3) {
       kind = KIND_ALERT;
       label = "Alert";
-      g = G_BELL;
     }
-    if (!CanPost(a, kind))
-      continue;
     Bool on = a->kind == kind;
     U32 bg = C_SURFACE, fg = C_MUTED;
     if (on && kind == KIND_ALERT) {
@@ -1607,26 +1235,21 @@ U0 DrawComposer(App *a)
     } else if (on) {
       bg = C_RAISED;
       fg = C_TEXT;
-    } else if (Hover(a, bx, y + 8, MaxI64(82, TextWidth(c, F_SEMI, label) + 44), 36)) {
+    } else if (Hover(a, bx, y + 8, 64, 36)) {
       fg = C_TEXT;
     }
-    I64 kw = MaxI64(82, TextWidth(c, F_SEMI, label) + 44);
-    Round(c, bx, y + 8, kw, 36, 6, bg);
-    I64 lx = bx + (kw - TextWidth(c, F_SEMI, label) - 20) / 2 + 20;
-    Icon(a, g, lx - 12, y + 26, 14, fg);
-    TextMid(c, F_SEMI, lx, y + 26, label, fg);
-    AddHit(a, bx, y + 8, kw, 36, H_KIND, kind);
-    bx += kw + 4;
+    Round(c, bx, y + 8, 64, 36, 6, bg);
+    TextMid(c, F_SEMI, bx + (64 - TextWidth(c, F_SEMI, label)) / 2, y + 26, label, fg);
+    AddHit(a, bx, y + 8, 64, 36, H_KIND, kind);
+    bx += 68;
   }
   U8 hint[96];
   if (a->kind == KIND_NOTE)
     snprintf(hint, 96, "Note under %s: what you saw or did, and where", g_phase_names[IncidentPhase(a)]);
   else if (a->kind == KIND_ALERT)
     StrCpy(hint, "Alert the manager: what looks wrong and where. Their panel buzzes.");
-  else if (a->kind == KIND_COMMAND)
-    StrCpy(hint, "Command: lead, Legal, Executive, Comms, Insurer. Not shown to the floor.");
   else
-    StrCpy(hint, "Floor: the people working the incident. Kept in the log too.");
+    StrCpy(hint, "Message the team. Chat is kept in the log too.");
   Input(a, FLD_COMPOSE, bx + 4, y + 8, (g_cw - SIDE_W - PANEL_W - 2 * PAD) - (bx - x) - 4 - 100, 36, hint);
   Button(a, x + (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 92, y + 8, 84, 36, "Send", BTN_PRIMARY, H_SEND);
 }
@@ -1634,7 +1257,9 @@ U0 DrawComposer(App *a)
 // ---- pages ----------------------------------------------------------------
 
 // One log entry as a row. Returns its height. With draw FALSE it only measures.
-I64 LogRow(App *a, Entry *e, U8 *text, I64 x, I64 y, I64 w, Bool draw, I64 max_lines = 3)
+// With follow TRUE the row continues the one above it (same person, same
+// minute), so the time and name aren't repeated.
+I64 LogRow(App *a, Entry *e, U8 *text, I64 x, I64 y, I64 w, Bool draw, I64 max_lines = 3, Bool follow = FALSE)
 {
   Canvas *c = a->cv;
   I64 tx = x + 262, tw = w - 262 - 16;
@@ -1648,27 +1273,17 @@ I64 LogRow(App *a, Entry *e, U8 *text, I64 x, I64 y, I64 w, Bool draw, I64 max_l
   U8 clock[8], name[NAME_MAX], tag[24];
   ClockText(e->time, clock);
   NameOf(a->st->log, e->author, name);
-  U32 tc;
-  Bool badge = EntryTag(e, text, tag, &tc);
-  Text(c, F_MONO, x + 16, y + 10, clock, C_FAINT);
-  Text(c, F_SEMI, x + 66, y + 9, name, C_TEXT, 84);
-  if (badge)
-    Badge(a, x + 156, y + 18, tag, tc);
-  else if (StrCmp(tag, "chat") == 0)
-    Icon(a, G_CHAT, x + 166, y + 18, 16, C_FAINT);
-  else if (StrCmp(tag, "team") == 0)
-    Icon(a, G_TEAM, x + 166, y + 18, 16, C_FAINT);
-  else
-    Text(c, F_SMALL, x + 158, y + 10, tag, C_FAINT, 100);
+  KindTag(e, tag);
+  if (!follow) {
+    Text(c, F_MONO, x + 16, y + 10, clock, C_FAINT);
+    Text(c, F_SEMI, x + 66, y + 9, name, C_TEXT, 84);
+  }
+  Text(c, F_SMALL, x + 156, y + 10, tag, KindColor(e->kind), 100);
   U32 fg = C_TEXT;
   if (e->status != ST_OK)
     fg = C_FAINT;
-  for (I64 i = 0; i < lines; i++) {
-    if (e->status == ST_OK)
-      RichText(c, F_BODY, tx, y + 9 + i * 18, text + starts[i], lens[i], fg);
-    else
-      Text(c, F_BODY, tx, y + 9 + i * 18, text + starts[i], fg, tw, lens[i]);
-  }
+  for (I64 i = 0; i < lines; i++)
+    Text(c, F_BODY, tx, y + 9 + i * 18, text + starts[i], fg, tw, lens[i]);
   if (e->status != ST_OK)
     Badge(a, x + w - 16 - 120, y + 18, StatusName(e->status), C_RED);
   return h;
@@ -1689,8 +1304,6 @@ U0 LogList(App *a, I64 x, I64 y, I64 w, I64 h, I64 scroll, Bool filtered)
   for (I64 k = log->count - 1; k >= 0 && n < LIST_MAX; k--) {
     Entry *e = &log->entries[a->order[k]];
     if (e->kind == KIND_EVENT)
-      continue;
-    if (!Visible(a, e))
       continue;
     EntryText(log, e, text);
     if (filtered && !PassesFilter(a, e, text))
@@ -1713,238 +1326,21 @@ U0 LogList(App *a, I64 x, I64 y, I64 w, I64 h, I64 scroll, Bool filtered)
   for (I64 i = n - 1; i >= 0; i--) {
     Entry *e = &log->entries[pick[i]];
     EntryText(log, e, text);
-    LogRow(a, e, text, x, ry, w, TRUE);
-    if (i > 0)
+    Bool follow = FALSE;
+    if (i < n - 1) {
+      Entry *p = &log->entries[pick[i + 1]];
+      follow = Same(p->author, e->author, PK_BYTES) && p->time / 60 == e->time / 60;
+    }
+    Bool next_follows = FALSE;
+    if (i > 0) {
+      Entry *q = &log->entries[pick[i - 1]];
+      next_follows = Same(q->author, e->author, PK_BYTES) && q->time / 60 == e->time / 60;
+    }
+    LogRow(a, e, text, x, ry, w, TRUE, 3, follow);
+    if (i > 0 && !next_follows)
       HLine(c, x + 1, ry + heights[i] - 1, w - 2, C_ROWLINE);
     ry += heights[i];
   }
-  Free(text);
-  if (n == 0 && log->count > 0)
-    TextMid(c, F_BODY, x + 16, y + 30, "No entries match. Clear the search or pick All.", C_FAINT);
-}
-
-// ---- conversation view for the Chat log --------------------------------
-
-U32 RoleColor(U8 *role)
-{
-  if (StrCmp(role, "Incident lead") == 0)
-    return C_CYAN;
-  for (I64 i = 0; i < ROLES; i++)
-    if (StrCmp(role, g_roles[i]) == 0)
-      return g_role_color[i];
-  return C_FAINT;
-}
-
-U0 Initials(U8 *name, U8 *out)
-{
-  I64 n = 0;
-  Bool start = TRUE;
-  for (I64 i = 0; name[i] && n < 2; i++) {
-    if (name[i] == ' ') {
-      start = TRUE;
-    } else if (start) {
-      out[n++] = ToUpper(name[i]);
-      start = FALSE;
-    }
-  }
-  out[n] = 0;
-}
-
-U0 Avatar(App *a, U8 *pk, I64 cx, I64 cy)
-{
-  U8 name[NAME_MAX], role[NAME_MAX], ini[4];
-  NameOf(a->st->log, pk, name);
-  RoleNow(a->st->log, pk, role);
-  Initials(name, ini);
-  Dot(a->cv, cx, cy, 30, RoleColor(role));
-  TextMid(a->cv, F_LABEL, cx - TextWidth(a->cv, F_LABEL, ini) / 2, cy, ini, C_BG);
-}
-
-Bool IsMessage(Entry *e)
-{
-  return e->kind == KIND_NOTE || e->kind == KIND_CHAT || e->kind == KIND_ALERT || e->kind == KIND_SCOPE ||
-         e->kind == KIND_COMMAND;
-}
-
-// Names of the other stations that hold e, from their last heads.
-I64 ReceivedBy(App *a, Entry *e, U8 *out, I64 cap)
-{
-  out[0] = 0;
-  I64 n = 0;
-  for (I64 i = 0; i < a->team.peer_count; i++) {
-    Peer *p = &a->team.peers[i];
-    if (Same(p->pk, a->st->pk, PK_BYTES) || !PeerHas(p, e->author, e->seq))
-      continue;
-    I64 l = StrLen(out);
-    if (n > 0 && l + 2 < cap) {
-      StrCpy(out + l, ", ");
-      l += 2;
-    }
-    CopyText(out + l, p->name, cap - l);
-    n++;
-  }
-  return n;
-}
-
-#define CV_LINES 6
-
-// One item of the conversation. Returns its height; with draw FALSE it only
-// measures. cont means the same person spoke just before, so the name and
-// avatar are left out.
-I64 ConvoItem(App *a, Entry *e, U8 *text, Bool cont, I64 x, I64 y, I64 w, Bool draw)
-{
-  Canvas *c = a->cv;
-  U8 clock[8];
-  ClockText(e->time, clock);
-  if (!IsMessage(e)) {
-    if (draw) {
-      U8 line[BODY_MAX + 160];
-      snprintf(line, BODY_MAX + 160, "%s   %s", clock, text);
-      I64 lw = MinI64(TextWidth(c, F_SMALL, line), w - 80);
-      I64 lx = x + (w - lw) / 2;
-      HLine(c, x + 24, y + 15, lx - x - 36, C_ROWLINE);
-      HLine(c, lx + lw + 12, y + 15, x + w - 24 - (lx + lw + 12), C_ROWLINE);
-      TextMid(c, F_SMALL, lx, y + 15, line, C_FAINT, lw);
-    }
-    return 30;
-  }
-  Bool mine = Same(e->author, a->st->pk, PK_BYTES);
-  I64 maxw = MinI64(w - 150, 640);
-  I64 starts[CV_LINES], lens[CV_LINES];
-  I64 lines = Wrap(c, F_BODY, text, maxw - 28, starts, lens, CV_LINES);
-  I64 head = 22;
-  if (cont)
-    head = 0;
-  I64 bh = 16 + lines * 19;
-  I64 rec = 0;
-  if (mine && a->member_count > 1)
-    rec = 18;
-  I64 h = head + bh + rec + 10;
-  if (!draw)
-    return h;
-
-  I64 bw = 0;
-  for (I64 i = 0; i < lines; i++)
-    bw = MaxI64(bw, TextWidth(c, F_BODY, text + starts[i], lens[i]));
-  bw += 28;
-  U8 tag[24];
-  U32 tc;
-  Bool badge = EntryTag(e, text, tag, &tc);
-  I64 bx = x + 58;
-  if (mine)
-    bx = x + w - 58 - bw;
-
-  if (!cont) {
-    U8 name[NAME_MAX], role[NAME_MAX];
-    NameOf(a->st->log, e->author, name);
-    RoleNow(a->st->log, e->author, role);
-    if (mine)
-      Avatar(a, e->author, x + w - 30, y + 26);
-    else
-      Avatar(a, e->author, x + 30, y + 26);
-    if (mine)
-      StrCpy(name, "You");
-    I64 nw = TextWidth(c, F_SEMI, name), rw = TextWidth(c, F_SMALL, role), cw = TextWidth(c, F_MONO, clock);
-    I64 tw = 0;
-    if (badge)
-      tw = TextWidth(c, F_LABEL, tag) + 22;
-    I64 hx = bx + 2;
-    if (mine)
-      hx = x + w - 58 - (nw + 10 + rw + 10 + cw + tw) - 2;
-    Text(c, F_SEMI, hx, y, name, C_TEXT);
-    hx += nw + 10;
-    Text(c, F_SMALL, hx, y + 2, role, RoleColor(role));
-    hx += rw + 10;
-    Text(c, F_MONO, hx, y + 2, clock, C_FAINT);
-    hx += cw + 10;
-    if (badge)
-      Badge(a, hx, y + 9, tag, tc);
-  }
-  I64 by = y + head;
-  U32 bg = C_RAISED, border = C_LINE2;
-  if (mine) {
-    bg = Mix(C_CYAN, C_SURFACE, 26);
-    border = Mix(C_CYAN, C_SURFACE, 60);
-  }
-  if (e->kind == KIND_COMMAND) {
-    bg = Mix(C_AMBER, C_SURFACE, 22);
-    border = Mix(C_AMBER, C_SURFACE, 70);
-  }
-  if (e->kind == KIND_ALERT) {
-    bg = Mix(C_RED, C_SURFACE, 40);
-    border = C_RED;
-  }
-  Box(c, bx, by, bw, bh, 10, bg, border);
-  U32 fg = C_TEXT;
-  if (e->status != ST_OK)
-    fg = C_FAINT;
-  for (I64 i = 0; i < lines; i++)
-    RichText(c, F_BODY, bx + 14, by + 9 + i * 19, text + starts[i], lens[i], fg);
-  if (e->status != ST_OK)
-    Badge(a, bx + bw + 8, by + bh / 2, StatusName(e->status), C_RED);
-  if (rec) {
-    U8 names[160], line[200];
-    if (ReceivedBy(a, e, names, 160) > 0) {
-      snprintf(line, 200, "Received by %s", names);
-      TextMid(c, F_SMALL, x + w - 58 - MinI64(TextWidth(c, F_SMALL, line), maxw), by + bh + 9, line, C_GREEN_FG, maxw);
-    } else {
-      StrCpy(line, "Sent. Not received by anyone yet");
-      TextMid(c, F_SMALL, x + w - 58 - TextWidth(c, F_SMALL, line), by + bh + 9, line, C_FAINT);
-    }
-  }
-  return h;
-}
-
-// The Chat log as a conversation, newest at the bottom. scroll counts
-// items back from the newest.
-U0 ConvoList(App *a, I64 x, I64 y, I64 w, I64 h, I64 scroll)
-{
-  Canvas *c = a->cv;
-  Log *log = a->st->log;
-  CollectMembers(a);
-  LogSorted(log, a->order);
-  U8 *text = MAlloc(BODY_MAX + 128);
-  I64 *list = MAlloc(8 * (log->count + 1));
-  I64 total = 0;
-  for (I64 k = 0; k < log->count; k++) {
-    Entry *e = &log->entries[a->order[k]];
-    if (e->kind == KIND_EVENT)
-      continue;
-    EntryText(log, e, text);
-    if (!PassesFilter(a, e, text))
-      continue;
-    list[total++] = a->order[k];
-  }
-  I64 pick[LIST_MAX], heights[LIST_MAX];
-  Bool conts[LIST_MAX];
-  I64 n = 0, used = 0;
-  for (I64 k = total - 1 - scroll; k >= 0 && n < LIST_MAX; k--) {
-    Entry *e = &log->entries[list[k]];
-    Bool cont = FALSE;
-    if (k > 0 && IsMessage(e)) {
-      Entry *p = &log->entries[list[k - 1]];
-      cont = IsMessage(p) && Same(p->author, e->author, PK_BYTES) && e->time - p->time <= 300;
-    }
-    EntryText(log, e, text);
-    I64 ih = ConvoItem(a, e, text, cont, x, 0, w, FALSE);
-    if (used + ih > h - 24)
-      break;
-    pick[n] = list[k];
-    heights[n] = ih;
-    conts[n] = cont;
-    used += ih;
-    n++;
-  }
-  I64 ry = y + 14;
-  if (used >= h - 80)
-    ry = y + h - 10 - used;
-  for (I64 i = n - 1; i >= 0; i--) {
-    Entry *e = &log->entries[pick[i]];
-    EntryText(log, e, text);
-    ConvoItem(a, e, text, conts[i], x, ry, w, TRUE);
-    ry += heights[i];
-  }
-  Free(list);
   Free(text);
   if (n == 0 && log->count > 0)
     TextMid(c, F_BODY, x + 16, y + 30, "No entries match. Clear the search or pick All.", C_FAINT);
@@ -2042,8 +1438,7 @@ U0 DrawOverview(App *a)
         snprintf(cnt, 24, "%s records", num);
       }
       snprintf(detail, 64, "%s  %s", as->type, cnt);
-      Icon(a, TypeGlyph(as->type), CX0 + 202, ry + 15, 15, C_MUTED);
-      Text(c, F_SMALL, CX0 + 216, ry + 8, detail, C_MUTED, lw - 216 - 130);
+      Text(c, F_SMALL, CX0 + 196, ry + 8, detail, C_MUTED, lw - 196 - 130);
       Badge(a, CX0 + lw - 16 - TextWidth(c, F_LABEL, as->status) - 14, ry + 16, as->status, StatusColor(as->status));
       ry += 32;
     }
@@ -2064,8 +1459,8 @@ U0 DrawOverview(App *a)
       StrCpy(line, "1 alert for the manager");
     else
       snprintf(line, 80, "%ld alerts for the manager", UnackedAlerts(a));
-    Icon(a, G_BELL, rx + 20, ry + 20, 16, C_RED);
-    Text(c, F_SEMI, rx + 36, ry + 11, line, C_RED_FG, rw - 172);
+    Dot(c, rx + 20, ry + 20, 8, C_RED);
+    Text(c, F_SEMI, rx + 32, ry + 11, line, C_RED_FG, rw - 172);
     Button(a, rx + rw - 136, ry + 4, 120, 30, "Acknowledge", BTN_GHOST, H_ACK);
     ry += 40;
     items++;
@@ -2076,32 +1471,23 @@ U0 DrawOverview(App *a)
       StrCpy(line, "1 suspicious server event to check");
     else
       snprintf(line, 80, "%ld suspicious server events to check", a->sus_open);
-    Icon(a, G_SERVER, rx + 20, ry + 20, 16, C_RED);
-    Text(c, F_SEMI, rx + 36, ry + 11, line, C_RED_FG, rw - 140);
+    Dot(c, rx + 20, ry + 20, 8, C_RED);
+    Text(c, F_SEMI, rx + 32, ry + 11, line, C_RED_FG, rw - 140);
     Button(a, rx + rw - 92, ry + 4, 76, 30, "Review", BTN_GHOST, H_NAV, V_SERVER);
     ry += 40;
     items++;
   }
-  Entry *mnet = ManagerNetwork(a);
   if (IsCut(a)) {
-    Icon(a, G_GLOBEOFF, rx + 20, ry + 20, 16, C_RED);
-    Text(c, F_BODY, rx + 36, ry + 11, "Internet cut on this machine. ARK runs on the relay.", C_TEXT, rw - 48);
-    ry += 40;
-    items++;
-  } else if (!IsAdmin(a->st) && mnet != NULL && StrNCmp(mnet->body, "Cut", 3) == 0) {
-    U8 boss[NAME_MAX], line[128];
-    NameOf(a->st->log, mnet->author, boss);
-    snprintf(line, 128, "%s's laptop is off the internet.", boss);
-    Icon(a, G_GLOBEOFF, rx + 20, ry + 20, 16, C_RED);
-    Text(c, F_BODY, rx + 36, ry + 11, line, C_TEXT, rw - 48);
+    Dot(c, rx + 20, ry + 20, 8, C_RED);
+    Text(c, F_BODY, rx + 32, ry + 11, "Internet cut on this machine. ARK runs on the relay.", C_TEXT, rw - 48);
     ry += 40;
     items++;
   }
   if (a->team.join_pending && IsAdmin(a->st)) {
     U8 line[80];
     snprintf(line, 80, "%s asks to join the team", a->team.join_name);
-    Icon(a, G_TEAM, rx + 20, ry + 20, 16, C_CYAN);
-    Text(c, F_BODY, rx + 36, ry + 11, line, C_TEXT, rw - 130);
+    Dot(c, rx + 20, ry + 20, 8, C_CYAN);
+    Text(c, F_BODY, rx + 32, ry + 11, line, C_TEXT, rw - 130);
     Button(a, rx + rw - 92, ry + 4, 76, 30, "Review", BTN_GHOST, H_NAV, V_TEAM);
     ry += 40;
     items++;
@@ -2110,8 +1496,8 @@ U0 DrawOverview(App *a)
   if (problems > 0) {
     U8 line[80];
     snprintf(line, 80, "%ld log problems: entries failed a check", problems);
-    Icon(a, G_CHAIN, rx + 20, ry + 20, 16, C_RED);
-    Text(c, F_BODY, rx + 36, ry + 11, line, C_RED_FG, rw - 48);
+    Dot(c, rx + 20, ry + 20, 8, C_RED);
+    Text(c, F_BODY, rx + 32, ry + 11, line, C_RED_FG, rw - 48);
     ry += 40;
     items++;
   }
@@ -2122,8 +1508,8 @@ U0 DrawOverview(App *a)
     U8 line[96], rem[24];
     RemainingText(left, rem);
     snprintf(line, 96, "%s: %s", g_rule_who[clocks[i].rule], rem);
-    Icon(a, G_CLOCK, rx + 20, ry + 20, 16, C_AMBER);
-    Text(c, F_BODY, rx + 36, ry + 11, line, C_TEXT, rw - 48);
+    Dot(c, rx + 20, ry + 20, 8, C_AMBER);
+    Text(c, F_BODY, rx + 32, ry + 11, line, C_TEXT, rw - 48);
     ry += 40;
     items++;
   }
@@ -2135,8 +1521,8 @@ U0 DrawOverview(App *a)
       continue;
     U8 line[96];
     snprintf(line, 96, "%s: record count unknown", as->name);
-    Icon(a, G_SCOPE, rx + 20, ry + 20, 16, C_AMBER);
-    Text(c, F_BODY, rx + 36, ry + 11, line, C_TEXT, rw - 48);
+    Dot(c, rx + 20, ry + 20, 8, C_AMBER);
+    Text(c, F_BODY, rx + 32, ry + 11, line, C_TEXT, rw - 48);
     ry += 40;
     items++;
   }
@@ -2168,9 +1554,7 @@ U0 DrawLogPage(App *a)
   PageHead(a, "Chat log", sub);
 
   I64 x = CX0 + (g_cw - SIDE_W - PANEL_W - 2 * PAD);
-  for (I64 f = FILTERS - 1; f >= 0; f--) {
-    if ((f == FILTER_CHAT && !Can(a, CAN_FLOOR_READ)) || (f == FILTER_CMD && !Can(a, CAN_CMD_READ)))
-      continue;
+  for (I64 f = 4; f >= 0; f--) {
     I64 w = TextWidth(c, F_MED, g_filter_names[f]) + 26;
     x -= w;
     Bool on = a->filter == f;
@@ -2203,7 +1587,7 @@ U0 DrawLogPage(App *a)
     Text(c, F_H2, CX0 + 20, y + 24, "Nothing logged yet", C_TEXT);
     Text(c, F_BODY, CX0 + 20, y + 50, "Write what was seen first, where and by whom. Times and names are added for you.", C_MUTED);
   } else {
-    ConvoList(a, CX0, y, (g_cw - SIDE_W - PANEL_W - 2 * PAD), h, a->scroll);
+    LogList(a, CX0, y, (g_cw - SIDE_W - PANEL_W - 2 * PAD), h, a->scroll, TRUE);
     if (a->scroll > 0) {
       U8 note[64];
       snprintf(note, 64, "Scrolled back %ld. PgDn or wheel for newer.", a->scroll);
@@ -2268,6 +1652,7 @@ U0 DrawServerPage(App *a)
   I64 detail_h = 150;
   I64 h = g_ch - 20 - detail_h - 16 - y;
   Card(a, CX0, y, (g_cw - SIDE_W - PANEL_W - 2 * PAD), h);
+  // Column header.
   I64 cw = CX0 + 16, cu = CX0 + 92, ct = CX0 + 262, cd = CX0 + 360, dw = (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 360 - 128;
   Text(c, F_LABEL, cw, y + 14, "TIME", C_FAINT);
   Text(c, F_LABEL, cu, y + 14, "WHO, WHERE", C_FAINT);
@@ -2321,8 +1706,7 @@ U0 DrawServerPage(App *a)
     if (StrCmp(ev.user, "root") == 0)
       wc = C_AMBER_FG;
     TextMid(c, F_SEMI, cu, cy, who, wc, ct - cu - 10);
-    Icon(a, g_ev_glyph[ev.source], ct + 7, cy, 15, C_MUTED);
-    TextMid(c, F_SMALL, ct + 20, cy, g_ev_label[ev.source], C_MUTED, cd - ct - 30);
+    TextMid(c, F_SMALL, ct, cy, g_ev_label[ev.source], C_MUTED, cd - ct - 10);
     U32 dc = C_TEXT;
     if (a->risk[idx] == RISK_SUS)
       dc = C_RED_FG;
@@ -2412,7 +1796,7 @@ U0 DrawServerPage(App *a)
   } else if (IsAdmin(a->st)) {
     TextRight(c, F_SMALL, CX0 + (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 20, dy + 22, "Your team reports events to you.", C_FAINT);
   } else {
-    Button(a, bx, dy + 14, bw, 36, "Report to manager", BTN_RED, H_REPORT, a->selected, G_BELL);
+    Button(a, bx, dy + 14, bw, 36, "Report to manager", BTN_RED, H_REPORT, a->selected);
   }
 }
 
@@ -2452,8 +1836,7 @@ U0 DrawScopeForm(App *a, I64 y)
   Text(c, F_SEMI, x + 20, fy, "What kind of data it holds", C_TEXT);
   I64 tw = (w - 40 - 4 * 8) / 5;
   for (I64 i = 0; i < 5; i++)
-    Choice(a, x + 20 + i * (tw + 8), fy + 22, tw, 54, g_data_types[i], g_type_short[i], a->scope_type == i, 0, H_TYPE, i,
-           g_type_glyph[i]);
+    Choice(a, x + 20 + i * (tw + 8), fy + 22, tw, 54, g_data_types[i], g_type_short[i], a->scope_type == i, 0, H_TYPE, i);
 
   fy += 92;
   Text(c, F_SEMI, x + 20, fy, "How many people", C_TEXT);
@@ -2508,8 +1891,7 @@ U0 DrawScopePage(App *a)
     Asset *as = &a->assets[i];
     I64 cy = ry + 22;
     TextMid(c, F_SEMI, CX0 + cols[0], cy, as->name, C_TEXT, 210);
-    Icon(a, TypeGlyph(as->type), CX0 + cols[1] + 8, cy, 16, C_MUTED);
-    TextMid(c, F_BODY, CX0 + cols[1] + 22, cy, as->type, C_TEXT);
+    TextMid(c, F_BODY, CX0 + cols[1], cy, as->type, C_TEXT);
     U8 *where = as->where;
     if (StrCmp(where, "-") == 0)
       where = "none";
@@ -2620,7 +2002,7 @@ U0 DrawTeamPage(App *a)
   PageHead(a, "Team", "Everyone admitted to this incident. Only the manager can admit people.");
   I64 y = TOP_H + 84;
   if (a->team.join_pending && IsAdmin(a->st)) {
-    Box(c, CX0, y, (g_cw - SIDE_W - PANEL_W - 2 * PAD), 200, 8, Mix(C_CYAN, C_SURFACE, 20), C_CYAN);
+    Box(c, CX0, y, (g_cw - SIDE_W - PANEL_W - 2 * PAD), 150, 8, Mix(C_CYAN, C_SURFACE, 20), C_CYAN);
     U8 line[96];
     snprintf(line, 96, "%s asks to join", a->team.join_name);
     Text(c, F_H2, CX0 + 20, y + 18, line, C_TEXT);
@@ -2628,38 +2010,11 @@ U0 DrawTeamPage(App *a)
     BigCode(a, CX0 + 20, y + 70, JoinCode(a->team.join_pk), C_CYAN_FG);
     Text(c, F_BODY, CX0 + 300, y + 76, "Approve only if it matches exactly.", C_TEXT);
     Text(c, F_SMALL, CX0 + 300, y + 98, "A different code means a different device is asking. Don't approve it.", C_MUTED);
-    Button(a, CX0 + (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 20 - 150, y + 20, 150, 40, "Approve", BTN_GREEN, H_APPROVE, 0, G_TEAM);
-    Text(c, F_SEMI, CX0 + 20, y + 162, "Their role", C_TEXT);
-    I64 rx = CX0 + 110;
-    for (I64 r = 0; r < ROLES; r++) {
-      I64 rw = TextWidth(c, F_MED, g_roles[r]) + 40;
-      Bool on = a->approve_role == r;
-      U32 bg = C_BG, border = C_LINE2, fg = C_MUTED;
-      if (on) {
-        bg = Mix(g_role_color[r], C_SURFACE, 40);
-        border = g_role_color[r];
-        fg = C_TEXT;
-      } else if (Hover(a, rx, y + 150, rw, 32)) {
-        fg = C_TEXT;
-      }
-      Box(c, rx, y + 150, rw, 32, 6, bg, border);
-      Dot(c, rx + 14, y + 166, 10, g_role_color[r]);
-      TextMid(c, F_MED, rx + 26, y + 166, g_roles[r], fg);
-      AddHit(a, rx, y + 150, rw, 32, H_ROLE, r);
-      rx += rw + 8;
-    }
-    y += 216;
+    Button(a, CX0 + (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 20 - 150, y + 20, 150, 40, "Approve", BTN_GREEN, H_APPROVE);
+    y += 166;
   }
   CollectMembers(a);
-  Bool editing = FALSE;
-  for (I64 i = 0; i < a->member_count; i++)
-    if (a->sel_on && Same(a->members[i].pk, a->sel_pk, PK_BYTES))
-      editing = TRUE;
-  if (!editing || !IsAdmin(a->st))
-    a->sel_on = FALSE;
   I64 h = 43 + MaxI64(1, a->member_count) * 48 + 8;
-  if (a->sel_on)
-    h += 60;
   Card(a, CX0, y, (g_cw - SIDE_W - PANEL_W - 2 * PAD), h);
   I64 online = 0;
   for (I64 i = 0; i < a->member_count; i++)
@@ -2682,12 +2037,8 @@ U0 DrawTeamPage(App *a)
     I64 nx = TextMid(c, F_SEMI, CX0 + 40, cy, m->name, C_TEXT, 200);
     if (Same(m->pk, a->st->pk, PK_BYTES))
       TextMid(c, F_SMALL, nx + 8, cy, "you", C_FAINT);
-    U8 role[NAME_MAX];
-    RoleNow(a->st->log, m->pk, role);
     if (m->admin)
       Badge(a, CX0 + 260, cy, "MANAGER", C_CYAN);
-    else if (role[0])
-      Badge(a, CX0 + 260, cy, role, RoleColor(role));
     else
       Badge(a, CX0 + 260, cy, "MEMBER", C_FAINT);
     U8 when[32], line[48], fp[32];
@@ -2703,50 +2054,8 @@ U0 DrawTeamPage(App *a)
       TextMid(c, F_SMALL, CX0 + (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 16 - TextWidth(c, F_SMALL, "online"), cy, "online", C_GREEN_FG);
     else
       TextMid(c, F_SMALL, CX0 + (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 16 - TextWidth(c, F_SMALL, "not heard"), cy, "not heard", C_FAINT);
-    I64 cw0 = g_cw - SIDE_W - PANEL_W - 2 * PAD;
-    Bool open = a->sel_on && Same(m->pk, a->sel_pk, PK_BYTES);
-    if (IsAdmin(a->st) && !m->admin) {
-      U8 *hint = "Manage";
-      if (open)
-        hint = "Close";
-      U32 hc = C_FAINT;
-      if (open || Hover(a, CX0, ry, cw0, 48))
-        hc = C_CYAN_FG;
-      TextMid(c, F_SMALL, CX0 + cw0 - 110 - TextWidth(c, F_SMALL, hint), cy, hint, hc);
-      AddHit(a, CX0, ry, cw0, 48, H_MEMBER, i);
-    }
-    if (open) {
-      I64 ey = ry + 48;
-      Fill(c, CX0 + 1, ey, cw0 - 2, 60, Mix(C_RAISED, C_SURFACE, 160));
-      U8 now[NAME_MAX];
-      RoleNow(a->st->log, m->pk, now);
-      TextMid(c, F_SEMI, CX0 + 24, ey + 30, "Role", C_TEXT);
-      I64 rx = CX0 + 70;
-      for (I64 rr = 0; rr < ROLES; rr++) {
-        I64 rw = TextWidth(c, F_SMALL, g_roles[rr]) + 30;
-        Bool on = StrCmp(now, g_roles[rr]) == 0;
-        U32 bg = C_BG, border = C_LINE2, fg = C_MUTED;
-        if (on) {
-          bg = Mix(g_role_color[rr], C_SURFACE, 40);
-          border = g_role_color[rr];
-          fg = C_TEXT;
-        } else if (Hover(a, rx, ey + 16, rw, 28)) {
-          fg = C_TEXT;
-        }
-        Box(c, rx, ey + 16, rw, 28, 6, bg, border);
-        Dot(c, rx + 11, ey + 30, 8, g_role_color[rr]);
-        TextMid(c, F_SMALL, rx + 20, ey + 30, g_roles[rr], fg);
-        AddHit(a, rx, ey + 16, rw, 28, H_SET_ROLE, rr);
-        rx += rw + 6;
-      }
-      U8 *rl = "Remove from team";
-      if (a->remove_armed != 0 && time(NULL) - a->remove_armed <= 3)
-        rl = "Press again";
-      Button(a, CX0 + cw0 - 16 - 160, ey + 12, 160, 36, rl, BTN_RED, H_REMOVE);
-      ry += 60;
-    }
     if (i < a->member_count - 1)
-      HLine(c, CX0 + 1, ry + 47, cw0 - 2, C_ROWLINE);
+      HLine(c, CX0 + 1, ry + 47, (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 2, C_ROWLINE);
     ry += 48;
   }
 
@@ -2777,31 +2086,17 @@ U0 DrawNetworkPage(App *a)
   I64 online = OnlineCount(a);
   Entry *net = LastNetwork(a, FALSE);
   if (net != NULL) {
-    U8 who[NAME_MAX + 16], when[32], head[160], sub[200];
-    if (Same(net->author, a->st->pk, PK_BYTES)) {
-      StrCpy(who, "This machine");
-    } else {
-      U8 name[NAME_MAX];
-      NameOf(a->st->log, net->author, name);
-      snprintf(who, NAME_MAX + 16, "%s's laptop", name);
-    }
+    U8 name[NAME_MAX], when[32], head[128];
+    NameOf(a->st->log, net->author, name);
     DateText(net->time, when);
+    Bool cut = StrNCmp(net->body, "Cut", 3) == 0;
     U32 col = C_GREEN;
-    if (StrNCmp(net->body, "Cut", 3) == 0) {
+    if (cut)
       col = C_RED;
-      snprintf(head, 160, "%s is off the internet", who);
-      snprintf(sub, 200, "Since %s. Any link an attacker had through it is gone; ARK keeps running over the relay.", when);
-    } else if (StrNCmp(net->body, "Tried", 5) == 0) {
-      col = C_AMBER;
-      snprintf(head, 160, "%s may still be online", who);
-      snprintf(sub, 200, "%s: %s", when, net->body);
-    } else {
-      snprintf(head, 160, "%s is back online", who);
-      snprintf(sub, 200, "Since %s.", when);
-    }
+    snprintf(head, 128, "%s: %s", when, name);
     Box(c, CX0, y, (g_cw - SIDE_W - PANEL_W - 2 * PAD), 60, 8, Mix(col, C_BG, 30), col);
     Text(c, F_SEMI, CX0 + 16, y + 12, head, LightOf(col));
-    Text(c, F_SMALL, CX0 + 16, y + 34, sub, LightOf(col), (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 32);
+    Text(c, F_SMALL, CX0 + 16, y + 34, net->body, LightOf(col), (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 32);
     y += 76;
   }
   if (a->link.fd < 0 || online == 0) {
@@ -2817,45 +2112,43 @@ U0 DrawNetworkPage(App *a)
     y += 76;
   }
 
-  LoadIcons(a);
-  I64 cw = g_cw - SIDE_W - PANEL_W - 2 * PAD;
-  Card(a, CX0, y, cw, 232);
-  I64 isz = 88, iy = y + 22, ty = iy + isz + 12;
-  I64 lx = CX0 + cw / 6, mx = CX0 + cw / 2, ox = CX0 + cw * 5 / 6, colw = cw / 3 - 24;
-  DrawImage(c, &a->icon_laptop, lx - isz / 2, iy, isz);
-  DrawImage(c, &a->icon_relay, mx - isz / 2, iy, isz);
-  DrawImage(c, &a->icon_laptop, ox - isz / 2, iy, isz);
-  Text(c, F_H2, lx - TextWidth(c, F_H2, "This station") / 2, ty, "This station", C_TEXT);
-  Text(c, F_SMALL, lx - MinI64(TextWidth(c, F_SMALL, a->st->name), colw) / 2, ty + 26, a->st->name, C_MUTED, colw);
-  U8 count[48];
-  snprintf(count, 48, "%s, %ld entries", a->port, a->st->log->count);
-  Text(c, F_SMALL, lx - MinI64(TextWidth(c, F_SMALL, count), colw) / 2, ty + 46, count, C_FAINT, colw);
-  Text(c, F_H2, mx - TextWidth(c, F_H2, "Relay") / 2, ty, "Relay", C_TEXT);
-  Text(c, F_SMALL, mx - TextWidth(c, F_SMALL, "Arduino UNO Q, own Wi-Fi") / 2, ty + 26, "Arduino UNO Q, own Wi-Fi", C_MUTED);
-  Badge(a, mx - (TextWidth(c, F_LABEL, "SEES ONLY CIPHERTEXT") + 14) / 2, ty + 56, "SEES ONLY CIPHERTEXT", C_PURPLE);
-  Text(c, F_H2, ox - TextWidth(c, F_H2, "Other stations") / 2, ty, "Other stations", C_TEXT);
-  I64 py = ty + 34, shown = 0;
+  Card(a, CX0, y, (g_cw - SIDE_W - PANEL_W - 2 * PAD), 172);
+  I64 bw = 220, by = y + 28, bh = 116;
+  // This station.
+  Box(c, CX0 + 24, by, bw, bh, 10, C_BG, C_LINE2);
+  Text(c, F_H2, CX0 + 40, by + 16, "This station", C_TEXT);
+  Text(c, F_SMALL, CX0 + 40, by + 40, a->st->name, C_MUTED, bw - 32);
+  Text(c, F_MONO, CX0 + 40, by + 60, a->port, C_FAINT, bw - 32);
+  U8 count[32];
+  snprintf(count, 32, "%ld ENTRIES", a->st->log->count);
+  Badge(a, CX0 + 40, by + 92, count, C_GREEN);
+  // Relay.
+  I64 rx = CX0 + ((g_cw - SIDE_W - PANEL_W - 2 * PAD) - 240) / 2;
+  Box(c, rx, by, 240, bh, 10, C_BG, C_PURPLE);
+  Text(c, F_H2, rx + (240 - TextWidth(c, F_H2, "Untrusted relay")) / 2, by + 16, "Untrusted relay", C_TEXT);
+  Text(c, F_SMALL, rx + (240 - TextWidth(c, F_SMALL, "Arduino UNO Q, own Wi-Fi")) / 2, by + 40, "Arduino UNO Q, own Wi-Fi", C_MUTED);
+  I64 bx = rx + (240 - TextWidth(c, F_LABEL, "SEES ONLY CIPHERTEXT") - 14) / 2;
+  Badge(a, bx, by + 78, "SEES ONLY CIPHERTEXT", C_PURPLE);
+  // Other stations.
+  I64 ox = CX0 + (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 24 - bw;
+  Box(c, ox, by, bw, bh, 10, C_BG, C_LINE2);
+  Text(c, F_H2, ox + 16, by + 16, "Other stations", C_TEXT);
+  I64 py = by + 46, shown = 0;
   I64 now = time(NULL);
-  for (I64 i = 0; i < a->team.peer_count && shown < 2; i++) {
+  for (I64 i = 0; i < a->team.peer_count && shown < 3; i++) {
     Peer *p = &a->team.peers[i];
+    Bool on = now - p->heard <= ONLINE_SECS;
     U32 dot = C_FAINT;
-    if (now - p->heard <= ONLINE_SECS)
+    if (on)
       dot = C_GREEN;
-    I64 nw = MinI64(TextWidth(c, F_SMALL, p->name), colw - 14);
-    I64 nx = ox - (nw + 14) / 2;
-    Dot(c, nx + 4, py, 8, dot);
-    TextMid(c, F_SMALL, nx + 14, py, p->name, C_TEXT, colw - 14);
-    py += 20;
+    Dot(c, ox + 22, py, 8, dot);
+    TextMid(c, F_BODY, ox + 34, py, p->name, C_TEXT, bw - 50);
+    py += 22;
     shown++;
   }
-  if (a->team.peer_count > 2) {
-    U8 more[32];
-    snprintf(more, 32, "and %ld more", a->team.peer_count - 2);
-    TextMid(c, F_SMALL, ox - TextWidth(c, F_SMALL, more) / 2, py, more, C_FAINT);
-  }
   if (shown == 0)
-    TextMid(c, F_SMALL, ox - TextWidth(c, F_SMALL, "none heard yet") / 2, py, "none heard yet", C_FAINT);
-  // Links between them, level with the middle of the icons.
+    TextMid(c, F_SMALL, ox + 16, py, "none heard yet", C_FAINT);
+  // Links between them.
   U32 l1 = C_GREEN, l2 = C_GREEN;
   U8 *t1 = "sealed link", *t2 = "sealed link";
   if (a->link.fd < 0) {
@@ -2866,15 +2159,14 @@ U0 DrawNetworkPage(App *a)
     l2 = C_AMBER;
     t2 = "waiting";
   }
-  I64 ly = iy + isz / 2 + 6;
-  I64 ax = lx + isz / 2 + 14, aw = mx - isz / 2 - 14 - ax;
-  Fill(c, ax, ly, aw, 3, l1);
-  TextMid(c, F_SMALL, ax + (aw - TextWidth(c, F_SMALL, t1)) / 2, ly - 14, t1, LightOf(l1));
-  I64 bx2 = mx + isz / 2 + 14, bw2 = ox - isz / 2 - 14 - bx2;
-  Fill(c, bx2, ly, bw2, 3, l2);
-  TextMid(c, F_SMALL, bx2 + (bw2 - TextWidth(c, F_SMALL, t2)) / 2, ly - 14, t2, LightOf(l2));
+  I64 ax = CX0 + 24 + bw, aw = rx - ax;
+  Fill(c, ax + 8, by + bh / 2, aw - 16, 3, l1);
+  TextMid(c, F_SMALL, ax + (aw - TextWidth(c, F_SMALL, t1)) / 2, by + bh / 2 - 14, t1, LightOf(l1));
+  I64 cx = rx + 240, cw = ox - cx;
+  Fill(c, cx + 8, by + bh / 2, cw - 16, 3, l2);
+  TextMid(c, F_SMALL, cx + (cw - TextWidth(c, F_SMALL, t2)) / 2, by + bh / 2 - 14, t2, LightOf(l2));
 
-  y += 248;
+  y += 188;
   I64 hw = ((g_cw - SIDE_W - PANEL_W - 2 * PAD) - 16) / 2;
   Card(a, CX0, y, hw, 132);
   I64 ry = CardHead(a, CX0, y, hw, "What the relay can see");
@@ -2888,20 +2180,12 @@ U0 DrawNetworkPage(App *a)
   Text(c, F_BODY, CX0 + hw + 32, ry + 56, "an entry without the other stations noticing.", C_MUTED);
 
   y += 148;
-  Card(a, CX0, y, (g_cw - SIDE_W - PANEL_W - 2 * PAD), 43 + 5 * 40 + 8);
+  Card(a, CX0, y, (g_cw - SIDE_W - PANEL_W - 2 * PAD), 43 + 4 * 40 + 8);
   ry = CardHead(a, CX0, y, (g_cw - SIDE_W - PANEL_W - 2 * PAD), "Checks on this station");
   U8 line[96];
   snprintf(line, 96, "%ld", a->st->rejected);
   TextMid(c, F_BODY, CX0 + 16, ry + 20, "Messages rejected (failed the seal or signature check)", C_MUTED);
   TextMid(c, F_SEMI, CX0 + (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 16 - TextWidth(c, F_SEMI, line), ry + 20, line, C_TEXT);
-  I64 other = MaxI64(a->team.other_lead_at, a->team.other_member_at);
-  if (other == 0)
-    StrCpy(line, "none");
-  else
-    snprintf(line, 96, "%ld messages, last %lds ago", a->team.other_count, time(NULL) - other);
-  TextMid(c, F_BODY, CX0 + 16, ry + 60, "From stations on another incident (ignored, not tampering)", C_MUTED);
-  TextMid(c, F_SEMI, CX0 + (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 16 - TextWidth(c, F_SEMI, line), ry + 60, line, C_TEXT);
-  ry += 40;
   snprintf(line, 96, "%ld", a->st->log->problems);
   TextMid(c, F_BODY, CX0 + 16, ry + 60, "Entries with a broken chain, unknown author or fork", C_MUTED);
   TextMid(c, F_SEMI, CX0 + (g_cw - SIDE_W - PANEL_W - 2 * PAD) - 16 - TextWidth(c, F_SEMI, line), ry + 60, line, C_TEXT);
@@ -2926,19 +2210,11 @@ U0 GuideBlock(App *a, I64 x, I64 *y, I64 w, U8 *head, U8 **lines)
   Text(c, F_SEMI, x, *y, head, C_TEXT);
   *y += 24;
   for (I64 i = 0; lines[i] != NULL; i++) {
-    RichText(c, F_BODY, x, *y, lines[i], StrLen(lines[i]), C_MUTED);
+    Text(c, F_BODY, x, *y, lines[i], C_MUTED, w);
     *y += 20;
   }
   *y += 18;
 }
-
-U8 *g_guide_colors[] = {
-  "Red, act now: ALERT, CUT, ENCRYPTED, EXFILTRATED",
-  "Yellow, check it: SUSPECTED, WATCH, deadlines",
-  "Green, safe: CLEAN, CONTAINED, RESTORED",
-  "Phases: DETECT, CONTAIN, ERADICATE, RECOVER",
-  "Grey: chat and team news, nothing to act on.", NULL
-};
 
 U8 *g_guide_what[] = {
   "A logbook for a cyber incident that never touches the",
@@ -2958,27 +2234,8 @@ U8 *g_guide_phases[] = {
   "CONTAIN    stop the spread: isolate, block, reset",
   "ERADICATE  remove the attacker and their tools",
   "RECOVER    restore systems, watch for a return",
-  "The manager sets it. An analyst's click asks them.", NULL
+  "Clicking a phase at the top logs the change for all.", NULL
 };
-
-// Symbol key: glyph and what it stands for.
-I64 g_key_glyph[8] = {G_TERMINAL, G_SHIELD, G_LOGIN, G_LOCKX, G_GLOBE, G_ACCOUNT, G_GLOBEOFF, G_BELL};
-U8 *g_key_text[8] = {"command", "sudo", "login", "failed login", "web request", "account change", "internet cut",
-                     "alert"};
-
-U0 SymbolKey(App *a, I64 x, I64 *y, I64 w)
-{
-  Canvas *c = a->cv;
-  Text(c, F_SEMI, x, *y, "Symbols", C_TEXT);
-  *y += 30;
-  I64 cw = w / 2;
-  for (I64 i = 0; i < 8; i++) {
-    I64 cx = x + (i % 2) * cw, cy = *y + (i / 2) * 26;
-    Icon(a, g_key_glyph[i], cx + 8, cy + 2, 16, C_MUTED);
-    TextMid(c, F_BODY, cx + 26, cy + 2, g_key_text[i], C_MUTED, cw - 30);
-  }
-  *y += 4 * 26 + 10;
-}
 U8 *g_guide_badges[] = {
   "CHAIN BROKEN  an entry before it is missing or changed",
   "NOT A MEMBER  written by someone never admitted",
@@ -3018,20 +2275,7 @@ U0 DrawGuidePage(App *a)
   GuideBlock(a, CX0 + 20, &ly, hw - 40, "What ARK is", g_guide_what);
   GuideBlock(a, CX0 + 20, &ly, hw - 40, "Server log", g_guide_server);
   GuideBlock(a, CX0 + 20, &ly, hw - 40, "Writing", g_guide_write);
-  Text(a->cv, F_SEMI, CX0 + 20, ly, "Phases", C_TEXT);
-  ly += 24;
-  for (I64 i = 0; g_guide_phases[i] != NULL; i++) {
-    I64 tx = CX0 + 20;
-    if (i < 4) {
-      Icon(a, g_phase_glyph[i + 1], tx + 7, ly + 9, 14, LightOf(PhaseColor(i + 1)));
-      tx += 22;
-    }
-    RichText(a->cv, F_BODY, tx, ly, g_guide_phases[i], StrLen(g_guide_phases[i]), C_MUTED);
-    ly += 20;
-  }
-  ly += 18;
-  SymbolKey(a, CX0 + 20, &ly, hw - 40);
-  GuideBlock(a, CX0 + hw + 36, &ry, hw - 40, "Colors", g_guide_colors);
+  GuideBlock(a, CX0 + 20, &ly, hw - 40, "Phases", g_guide_phases);
   GuideBlock(a, CX0 + hw + 36, &ry, hw - 40, "Warning badges", g_guide_badges);
   GuideBlock(a, CX0 + hw + 36, &ry, hw - 40, "Keys", g_guide_keys);
   GuideBlock(a, CX0 + hw + 36, &ry, hw - 40, "Hardware panel", g_guide_panel);
@@ -3214,15 +2458,7 @@ U0 PutLine(I32 fd, U8 *line)
   line[n] = 0;
 }
 
-U8 *g_export_kind[12] = {"", "genesis", "note", "chat", "scope", "member", "alert", "network", "event", "role", "remove",
-                         "command"};
-
-U8 *ExportKind(I64 kind)
-{
-  if (kind < 0 || kind > 11)
-    return "";
-  return g_export_kind[kind];
-}
+U8 *g_export_kind[9] = {"", "genesis", "note", "chat", "scope", "member", "alert", "network", "event"};
 
 Bool ExportReport(App *a)
 {
@@ -3293,8 +2529,6 @@ Bool ExportReport(App *a)
       continue;
     NameOf(log, e->author, f2);
     Tsv(f2, f2, NAME_MAX);
-    if (e->kind == KIND_COMMAND)
-      continue;
     if (e->kind == KIND_EVENT) {
       Event ev;
       if (!EventFromBody(e->body, &ev))
@@ -3320,7 +2554,7 @@ Bool ExportReport(App *a)
         ref[8] = 0;
       }
       EntryText(log, e, text);
-      snprintf(line, 4096, "entry\t%ld\t%s\t%s\t%s\t%s\t%s", e->time, ExportKind(e->kind),
+      snprintf(line, 4096, "entry\t%ld\t%s\t%s\t%s\t%s\t%s", e->time, g_export_kind[e->kind],
                g_phase_names[MinI64(MaxI64(e->phase, 0), 4)], f2, ref, Tsv(f1, text, BODY_MAX));
     }
     PutLine(fd, line);
@@ -3377,7 +2611,7 @@ U8 *ReportTool()
 }
 
 // Loads the model in the background the first time the Report page opens,
-// so pressing Request report doesn't wait for it.
+// so pressing Write report doesn't wait for it.
 U0 WarmReport(App *a)
 {
   if (a->report_text == NULL && a->report_state == RS_NONE && LoadReport(a)) {
@@ -3394,7 +2628,7 @@ U0 WarmReport(App *a)
 
 U0 WriteReport(App *a)
 {
-  if (a->report_state == RS_RUNNING || !Can(a, CAN_REPORT))
+  if (a->report_state == RS_RUNNING)
     return;
   if (strchr(a->st->dir, '\'') != NULL) {
     Say(a, "The station directory name has a quote in it; rename it to write a report.", C_RED_FG);
@@ -3576,7 +2810,7 @@ U0 DrawReportPage(App *a)
   else if (a->report_state == RS_DONE)
     Button(a, CX0 + cw - 180, y + 20, 160, 36, "Request again", BTN_GHOST, H_WRITE);
   else
-    Button(a, CX0 + cw - 180, y + 20, 160, 36, "Request report", BTN_PRIMARY, H_WRITE, 0, G_REPORT);
+    Button(a, CX0 + cw - 180, y + 20, 160, 36, "Request report", BTN_PRIMARY, H_WRITE);
 
   y += 92;
   I64 h = g_ch - 20 - y;
@@ -3602,40 +2836,8 @@ U0 DrawReportPage(App *a)
   a->report_max_scroll = MaxI64(0, ty + a->report_scroll - (y + 24) - h + 48);
 }
 
-// The role goes in the window title so two stations on one desktop can be
-// told apart in the taskbar.
-U0 WindowTitle(App *a)
-{
-  U8 title[160];
-  if (Ready(a) && IsAdmin(a->st))
-    snprintf(title, 160, "ARK  Manager: %s", a->st->name);
-  else if (Ready(a)) {
-    U8 role[NAME_MAX];
-    RoleNow(a->st->log, a->st->pk, role);
-    if (Removed(a))
-      snprintf(title, 160, "ARK  Removed: %s", a->st->name);
-    else if (OnOldIncident(a))
-      snprintf(title, 160, "ARK  Old incident: %s", a->st->name);
-    else if (role[0])
-      snprintf(title, 160, "ARK  %s: %s", role, a->st->name);
-    else
-      snprintf(title, 160, "ARK  Analyst: %s", a->st->name);
-  }
-  else if (a->mode == MODE_UNLOCK)
-    snprintf(title, 160, "ARK  Locked: %s", a->st->dir);
-  else if (a->mode == MODE_READY)
-    snprintf(title, 160, "ARK  Waiting to join: %s", a->st->name);
-  else
-    snprintf(title, 160, "ARK  New station: %s", a->st->dir);
-  if (StrCmp(title, a->title) != 0 && a->cv->window != NULL) {
-    StrCpy(a->title, title);
-    SDL_SetWindowTitle(a->cv->window, title);
-  }
-}
-
 U0 Draw(App *a)
 {
-  WindowTitle(a);
   Canvas *c = a->cv;
   ClipAll(c);
   a->hit_count = 0;
@@ -3751,12 +2953,6 @@ U0 CutNetwork(App *a, U8 *how)
 {
   if (IsCut(a))
     return;
-  if (!IsAdmin(a->st)) {
-    // A member's relay link is usually Wi-Fi, so cutting their own laptop
-    // would cut them off the team too. The kill switch is the manager's.
-    Say(a, "The kill switch is on the manager's station. Send them an alert.", C_AMBER_FG);
-    return;
-  }
   I64 rc = RunSwitch("ARK_CUT_CMD", "nmcli networking off");
   U8 body[200];
   if (rc == 0) {
@@ -3774,8 +2970,10 @@ U0 RestoreNetwork(App *a, U8 *how)
 {
   if (!IsCut(a))
     return;
-  // Restoring runs on this machine, so only this station can do it. Leaving
-  // it to the manager would strand a member whose laptop was cut.
+  if (!IsAdmin(a->st)) {
+    Say(a, "Only the manager can restore the network.", C_AMBER_FG);
+    return;
+  }
   I64 rc = RunSwitch("ARK_RESTORE_CMD", "nmcli networking on");
   U8 body[200];
   if (rc == 0) {
@@ -3791,54 +2989,10 @@ U0 RestoreNetwork(App *a, U8 *how)
 // On screen the cut needs two presses; the hardware button is one.
 U0 CutPressed(App *a)
 {
-  if (!IsAdmin(a->st)) {
-    CutNetwork(a, "on screen");
-    return;
-  }
   if (a->cut_armed != 0 && time(NULL) - a->cut_armed <= 3)
     CutNetwork(a, "on screen");
   else
     a->cut_armed = time(NULL);
-}
-
-U0 SetRole(App *a, I64 r)
-{
-  if (!a->sel_on || !IsAdmin(a->st) || r < 0 || r >= ROLES)
-    return;
-  U8 now[NAME_MAX], name[NAME_MAX], line[128];
-  RoleNow(a->st->log, a->sel_pk, now);
-  if (StrCmp(now, g_roles[r]) == 0)
-    return;
-  U8 body[PK_BYTES + NAME_MAX];
-  MemCpy(body, a->sel_pk, PK_BYTES);
-  I64 rl = StrLen(g_roles[r]);
-  MemCpy(body + PK_BYTES, g_roles[r], rl);
-  if (PostAndSend(a, KIND_ROLE, PHASE_NONE, body, PK_BYTES + rl)) {
-    NameOf(a->st->log, a->sel_pk, name);
-    snprintf(line, 128, "%s is now %s.", name, g_roles[r]);
-    Say(a, line, C_GREEN_FG);
-  }
-}
-
-// Press twice within 3 seconds, like Clear.
-U0 RemoveSelected(App *a)
-{
-  if (!a->sel_on || !IsAdmin(a->st))
-    return;
-  if (a->remove_armed == 0 || time(NULL) - a->remove_armed > 3) {
-    a->remove_armed = time(NULL);
-    return;
-  }
-  a->remove_armed = 0;
-  U8 name[NAME_MAX], line[160];
-  NameOf(a->st->log, a->sel_pk, name);
-  if (RemoveMember(a->st, &a->link, a->sel_pk)) {
-    snprintf(line, 160, "%s removed. Everyone else now has a new team key; %s can't read anything new.", name, name);
-    Say(a, line, C_GREEN_FG);
-    a->sel_on = FALSE;
-  } else {
-    Say(a, "Couldn't remove them: no more team keys left for this incident.", C_RED_FG);
-  }
 }
 
 U0 Approve(App *a)
@@ -3847,9 +3001,9 @@ U0 Approve(App *a)
     return;
   U8 name[NAME_MAX];
   CopyText(name, a->team.join_name, NAME_MAX);
-  ApproveJoin(a->st, &a->team, &a->link, g_roles[a->approve_role]);
-  U8 line[128];
-  snprintf(line, 128, "%s admitted as %s. They now get the key and the whole log.", name, g_roles[a->approve_role]);
+  ApproveJoin(a->st, &a->team, &a->link);
+  U8 line[96];
+  snprintf(line, 96, "%s admitted. They now get the key and the whole log.", name);
   Say(a, line, C_GREEN_FG);
 }
 
@@ -3863,8 +3017,7 @@ U0 ReportEvent(App *a, I64 idx)
     return;
   Entry *e = &log->entries[idx];
   Event ev;
-  if (e->kind != KIND_EVENT || !EventFromBody(e->body, &ev) || ReportOf(a, e) != NULL || !Can(a, CAN_FLOOR_POST) ||
-      IsAdmin(a->st))
+  if (e->kind != KIND_EVENT || !EventFromBody(e->body, &ev) || ReportOf(a, e) != NULL)
     return;
   U8 ref[12], t[8], body[BODY_MAX];
   EntryRef(e, ref);
@@ -3954,27 +3107,6 @@ U0 PollFeed(App *a)
 
 U0 SetPhase(App *a, I64 p)
 {
-  if (!IsAdmin(a->st)) {
-    if (!Can(a, CAN_FLOOR_POST)) {
-      Say(a, "Phase changes come from the floor. Ask the incident lead in Command.", C_MUTED);
-      return;
-    }
-    U8 ask[96];
-    I64 now = time(NULL);
-    if (a->phase_asked == p && now - a->phase_asked_at < 60) {
-      snprintf(ask, 96, "Already asked the manager for %s.", g_phase_names[p]);
-      Say(a, ask, C_MUTED);
-      return;
-    }
-    snprintf(ask, 96, "Asks to move the response to %s.", g_phase_names[p]);
-    if (PostAndSend(a, KIND_ALERT, IncidentPhase(a), ask, StrLen(ask))) {
-      a->phase_asked = p;
-      a->phase_asked_at = now;
-      snprintf(ask, 96, "Asked the manager to move to %s. Their panel buzzes.", g_phase_names[p]);
-      Say(a, ask, C_TEXT);
-    }
-    return;
-  }
   U8 body[96];
   snprintf(body, 96, "Moved the response to %s: %s.", g_phase_names[p], g_phase_help[p]);
   if (PostAndSend(a, KIND_NOTE, p, body, StrLen(body))) {
@@ -3987,25 +3119,10 @@ U0 SetPhase(App *a, I64 p)
 U0 SendCompose(App *a)
 {
   Field *f = &a->fields[FLD_COMPOSE];
-  if (f->len == 0 || Removed(a) || OnOldIncident(a))
+  if (f->len == 0)
     return;
-  if (!CanPost(a, a->kind)) {
-    Say(a, "Your role can't post there.", C_RED_FG);
-    return;
-  }
   if (PostAndSend(a, a->kind, IncidentPhase(a), f->text, f->len)) {
     ClearField(a, FLD_COMPOSE);
-    // Show what was just sent, even if another tab was picked.
-    I64 tab = FILTER_ALL;
-    if (a->kind == KIND_NOTE)
-      tab = FILTER_NOTE;
-    else if (a->kind == KIND_CHAT)
-      tab = FILTER_CHAT;
-    else if (a->kind == KIND_COMMAND)
-      tab = FILTER_CMD;
-    if (a->filter != FILTER_ALL && a->filter != tab)
-      a->filter = tab;
-    a->scroll = 0;
     if (a->kind == KIND_ALERT) {
       Say(a, "Alert sent to the manager.", C_RED_FG);
       a->kind = KIND_NOTE;
@@ -4016,10 +3133,6 @@ U0 SendCompose(App *a)
 U0 OpenScope(App *a)
 {
   a->view = V_SCOPE;
-  if (!Can(a, CAN_FLOOR_POST)) {
-    Say(a, "Scope is recorded by Security and IT.", C_MUTED);
-    return;
-  }
   a->scope_open = TRUE;
   a->scope_type = -1;
   a->scope_status = -1;
@@ -4155,8 +3268,6 @@ U0 Choose(App *a, Bool start)
 U0 Act(App *a, I64 id, I64 arg)
 {
   if (id == H_NAV) {
-    if (arg == V_SERVER && !Can(a, CAN_SERVER_READ))
-      return;
     a->view = arg;
     a->scroll = 0;
     a->server_scroll = 0;
@@ -4166,44 +3277,14 @@ U0 Act(App *a, I64 id, I64 arg)
     a->focus = arg;
   } else if (id == H_PHASE) {
     SetPhase(a, arg);
-    if (IsAdmin(a->st) && a->alerts_acked < AlertCount(a)) {
-      Entry *al = NewestAlert(a);
-      if (al != NULL && RequestedPhase(AlertText(al->body)) == arg)
-        a->alerts_acked = AlertCount(a);
-    }
   } else if (id == H_SEND) {
     SendCompose(a);
   } else if (id == H_KIND) {
-    if (!CanPost(a, arg))
-      return;
     a->kind = arg;
     a->focus = FLD_COMPOSE;
-  } else if (id == H_ROLE) {
-    a->approve_role = arg;
-  } else if (id == H_MEMBER) {
-    CollectMembers(a);
-    if (arg < a->member_count) {
-      if (a->sel_on && Same(a->sel_pk, a->members[arg].pk, PK_BYTES)) {
-        a->sel_on = FALSE;
-      } else {
-        MemCpy(a->sel_pk, a->members[arg].pk, PK_BYTES);
-        a->sel_on = TRUE;
-      }
-      a->remove_armed = 0;
-    }
-  } else if (id == H_SET_ROLE) {
-    SetRole(a, arg);
-  } else if (id == H_REMOVE) {
-    RemoveSelected(a);
   } else if (id == H_FILTER) {
     a->filter = arg;
     a->scroll = 0;
-    if (arg == FILTER_NOTE && CanPost(a, KIND_NOTE))
-      a->kind = KIND_NOTE;
-    else if (arg == FILTER_CHAT && CanPost(a, KIND_CHAT))
-      a->kind = KIND_CHAT;
-    else if (arg == FILTER_CMD && CanPost(a, KIND_COMMAND))
-      a->kind = KIND_COMMAND;
   } else if (id == H_SCOPE_OPEN) {
     OpenScope(a);
   } else if (id == H_SCOPE_SHUT) {
@@ -4231,11 +3312,6 @@ U0 Act(App *a, I64 id, I64 arg)
     RestoreNetwork(a, "on screen");
   } else if (id == H_ACK) {
     a->alerts_acked = AlertCount(a);
-  } else if (id == H_ALERT_MGR && !IsAdmin(a->st)) {
-    a->kind = KIND_ALERT;
-    if (a->view != V_OVERVIEW && a->view != V_LOG)
-      a->view = V_OVERVIEW;
-    a->focus = FLD_COMPOSE;
   } else if (id == H_LOCK) {
     Lock(a);
   } else if (id == H_START) {
@@ -4375,16 +3451,14 @@ U0 OnKey(App *a, I64 sym, I64 mod)
     a->kind = KIND_NOTE;
     if (sym == KEY_F3)
       a->kind = KIND_CHAT;
-    if (!CanPost(a, a->kind))
-      a->kind = KIND_COMMAND;
     a->focus = FLD_COMPOSE;
   } else if (sym == KEY_F4) {
     OpenScope(a);
-  } else if (sym == KEY_F5 && !IsAdmin(a->st)) {
+  } else if (sym == KEY_F5) {
     a->view = V_LOG;
     a->kind = KIND_ALERT;
     a->focus = FLD_COMPOSE;
-  } else if (sym == KEY_F6 && Can(a, CAN_SERVER_READ)) {
+  } else if (sym == KEY_F6) {
     a->view = V_SERVER;
   } else if (sym == KEY_F7) {
     a->view = V_REPORT;
@@ -4439,9 +3513,7 @@ U0 PanelUpdate(App *a, Bool resend)
   if (a->panel_fd < 0)
     return;
   I64 problems = ProblemCount(a);
-  I64 alerts = 0;
-  if (IsAdmin(a->st))
-    alerts = AlertCount(a);
+  I64 alerts = AlertCount(a);
   if (alerts > a->panel_alerts || problems > a->panel_problems)
     PanelSend(a, "A\n");
   else if (a->team.join_pending && !a->panel_join)
@@ -4510,8 +3582,6 @@ U0 PollLink(App *a)
 {
   if (a->link.fd < 0 || a->mode != MODE_READY)
     return;
-  TagLink(&a->link, a->st);
-  I64 before = a->team.other_member_at;
   U8 *msg = MAlloc(MSG_MAX);
   I64 n;
   while ((n = LinkPoll(&a->link, msg)) > 0) {
@@ -4519,9 +3589,6 @@ U0 PollLink(App *a)
     a->dirty = TRUE;
   }
   Free(msg);
-  if (a->team.other_member_at != before && a->team.other_member_at - before > 60)
-    Say(a, "A laptop still on an old incident is on the relay. On that laptop: Team, Clear this station, then Join.",
-        LightOf(C_AMBER));
 }
 
 App *AppNew(U8 *dir, U8 *port, U8 *panel)
